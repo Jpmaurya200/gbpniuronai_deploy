@@ -63,8 +63,11 @@ export default function LoginPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Login failed')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const msg = data.detail ? `${data.error}: ${data.detail}` : (data.error || 'Login failed')
+        throw new Error(msg)
+      }
       // Prime the session cache so guarded pages see the user immediately.
       await mutate({ user: data.user, org: data.org, entitlements: data.entitlements, role: data.role || data.user?.role }, { revalidate: false })
       toast.success('Welcome back!')

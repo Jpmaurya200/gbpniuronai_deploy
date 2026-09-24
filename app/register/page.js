@@ -66,8 +66,11 @@ export default function RegisterPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password, inviteToken }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Sign up failed')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const msg = data.detail ? `${data.error}: ${data.detail}` : (data.error || 'Sign up failed')
+        throw new Error(msg)
+      }
       await mutate({ user: data.user, org: data.org, entitlements: data.entitlements, role: data.role || data.user?.role }, { revalidate: false })
       toast.success(inviteToken ? 'Welcome to the team! Workspace loaded.' : 'Welcome to niuronai! Your workspace is ready.')
       router.replace('/dashboard')
