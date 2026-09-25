@@ -69,7 +69,10 @@ export default function ReviewPage({ params }) {
         body: JSON.stringify({ experiences: selected, text, sessionId: sessionId.current }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Generation failed')
+      if (!res.ok) {
+        const msg = data.detail ? `${data.error || 'Generation failed'}: ${data.detail}` : (data.error || 'Generation failed')
+        throw new Error(msg)
+      }
       setDrafts(data.drafts.map((d) => ({ ...d, editing: false })))
       setTimeout(() => draftsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
     } catch (e) {
@@ -85,7 +88,10 @@ export default function ReviewPage({ params }) {
         body: JSON.stringify({ experiences: selected, text, sessionId: sessionId.current }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed')
+      if (!res.ok) {
+        const msg = data.detail ? `${data.error || 'Failed'}: ${data.detail}` : (data.error || 'Failed')
+        throw new Error(msg)
+      }
       const pick = data.drafts[i % data.drafts.length] || data.drafts[0]
       setDrafts((prev) => prev.map((d, idx) => (idx === i ? { ...d, text: pick.text } : d)))
       toast.success('Regenerated')

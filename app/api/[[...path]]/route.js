@@ -60,13 +60,43 @@ const LLM_KEY = process.env.EMERGENT_LLM_KEY
 const LLM_MODEL = process.env.LLM_MODEL || 'vertex_ai/gemini-3-flash-preview'
 
 async function callLLM(messages, temperature = 0.85) {
-  const res = await fetch(LLM_URL, {
+  const emergentKey = process.env.EMERGENT_LLM_KEY
+  const geminiKey = process.env.GEMINI_API_KEY || (emergentKey && emergentKey.startsWith('AIzaSy') ? emergentKey : null)
+
+  // 1. If key is a direct Google Gemini API key (starts with AIzaSy) or GEMINI_API_KEY is provided:
+  if (geminiKey) {
+    const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${geminiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model, messages, temperature }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data?.error?.message || `Google Gemini request failed (${res.status})`)
+    }
+    return data?.choices?.[0]?.message?.content || ''
+  }
+
+  // 2. Otherwise use Emergent universal gateway
+  const llmUrl = process.env.EMERGENT_LLM_URL || 'https://integrations.emergentagent.com/llm/chat/completions'
+  const llmKey = emergentKey
+  const llmModel = process.env.LLM_MODEL || 'vertex_ai/gemini-3-flash-preview'
+
+  if (!llmKey) {
+    throw new Error('Neither GEMINI_API_KEY nor EMERGENT_LLM_KEY is configured in environment variables.')
+  }
+
+  const res = await fetch(llmUrl, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${LLM_KEY}`,
+      Authorization: `Bearer ${llmKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model: LLM_MODEL, messages, temperature }),
+    body: JSON.stringify({ model: llmModel, messages, temperature }),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -94,6 +124,28 @@ const DRAFT_STYLES = [
   { key: 'detailed', label: 'Detailed & Experience-Focused' },
   { key: 'warm', label: 'Warm & Conversational' },
 ]
+
+function buildFallbackDrafts(campaign, experiences = [], customerText = '') {
+  const biz = campaign.businessName || 'this business'
+  const city = campaign.city ? ` in ${campaign.city}` : ''
+  const expList = experiences.length ? experiences.join(', ') : 'great service'
+  const note = customerText ? ` ${customerText.trim()}` : ''
+
+  return [
+    {
+      style: 'Natural & Concise',
+      text: `Had a wonderful experience at ${biz}${city}. Really impressed with the ${expList}!${note} Highly recommended.`,
+    },
+    {
+      style: 'Detailed & Experience-Focused',
+      text: `Visited ${biz} recently and was genuinely pleased with my experience. The ${expList} stood out immediately.${note} The team was attentive and very professional throughout. Will definitely be returning!`,
+    },
+    {
+      style: 'Warm & Conversational',
+      text: `So glad I visited ${biz}! Loved the ${expList}.${note} Thank you so much to the entire team for such good care. 5 stars all the way!`,
+    },
+  ]
+}
 
 async function generateReviewDrafts(campaign, experiences = [], customerText = '') {
   const services = (campaign.services || []).join(', ')
@@ -130,26 +182,33 @@ async function generateReviewDrafts(campaign, experiences = [], customerText = '
     .filter(Boolean)
     .join('\n')
 
-  const content = await callLLM([
-    { role: 'system', content: system },
-    { role: 'user', content: user },
-  ])
-
-  let arr = extractJsonArray(content)
-  if (!Array.isArray(arr) || arr.length === 0) {
-    // one retry with stricter instruction
-    const retry = await callLLM([
+  try {
+    const content = await callLLM([
       { role: 'system', content: system },
-      { role: 'user', content: user + '\n\nIMPORTANT: Output must be a raw JSON array only.' },
+      { role: 'user', content: user },
     ])
-    arr = extractJsonArray(retry)
-  }
-  if (!Array.isArray(arr)) throw new Error('Could not parse AI response')
 
-  return arr.slice(0, 3).map((d, i) => ({
-    style: d.style || DRAFT_STYLES[i]?.label || `Option ${i + 1}`,
-    text: (d.text || '').trim(),
-  }))
+    let arr = extractJsonArray(content)
+    if (!Array.isArray(arr) || arr.length === 0) {
+      // one retry with stricter instruction
+      const retry = await callLLM([
+        { role: 'system', content: system },
+        { role: 'user', content: user + '\n\nIMPORTANT: Output must be a raw JSON array only.' },
+      ])
+      arr = extractJsonArray(retry)
+    }
+    if (Array.isArray(arr) && arr.length > 0) {
+      return arr.slice(0, 3).map((d, i) => ({
+        style: d.style || DRAFT_STYLES[i]?.label || `Option ${i + 1}`,
+        text: (d.text || '').trim(),
+      }))
+    }
+  } catch (err) {
+    console.warn('[AI:generateReviewDrafts] LLM call failed, using fallback drafts:', err.message)
+    return buildFallbackDrafts(campaign, experiences, customerText)
+  }
+
+  return buildFallbackDrafts(campaign, experiences, customerText)
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +249,23 @@ function detectTopics(text = '') {
   return found.slice(0, 4)
 }
 
+function buildFallbackReply(campaign, review, tone = 'Professional') {
+  const biz = campaign.businessName || 'our team'
+  const reviewer = review.reviewerName ? review.reviewerName : 'valued customer'
+  const rating = Number(review.rating) || 5
+
+  if (rating >= 4) {
+    if (tone === 'Friendly' || tone === 'Warm') {
+      return `Hi ${reviewer}, thank you so much for the wonderful review and your kind words! We are delighted to know you had such a great experience with us. Looking forward to seeing you again soon! — The ${biz} Team`
+    }
+    return `Dear ${reviewer}, thank you for taking the time to share your feedback. We are truly pleased to hear that you had a positive experience with our services. We look forward to serving you again. Warm regards, ${biz}`
+  } else if (rating <= 2) {
+    return `Dear ${reviewer}, thank you for bringing this to our attention. We sincerely apologise that your experience did not meet expectations. We take this very seriously and would like to understand what happened and make things right. Please reach out to us directly so we can assist you. Sincerely, ${biz}`
+  } else {
+    return `Hello ${reviewer}, thank you for sharing your feedback. We appreciate your constructive input and are always striving to improve our services. We hope to deliver a 5-star experience on your next visit. Best regards, ${biz}`
+  }
+}
+
 async function generateReviewReply(campaign, review, tone = 'Professional', length = 'standard') {
   const toneDesc = TONE_GUIDE[tone] || TONE_GUIDE.Professional
   const lenDesc =
@@ -220,14 +296,20 @@ async function generateReviewReply(campaign, review, tone = 'Professional', leng
     .filter(Boolean)
     .join('\n')
 
-  const content = await callLLM(
-    [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    0.7
-  )
-  return String(content || '').replace(/^["']|["']$/g, '').trim()
+  try {
+    const content = await callLLM(
+      [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      0.7
+    )
+    const replyText = String(content || '').replace(/^["']|["']$/g, '').trim()
+    return replyText || buildFallbackReply(campaign, review, tone)
+  } catch (err) {
+    console.warn('[AI:generateReviewReply] LLM call failed, using fallback:', err.message)
+    return buildFallbackReply(campaign, review, tone)
+  }
 }
 
 const DEMO_REVIEWS = [
@@ -405,6 +487,68 @@ function computeEngagement(an, sig) {
   return { score, detail: `${an.landing_view} campaign views · ${rates.googleRedirectRate || 0}% reach Google.` }
 }
 
+function buildFallbackAuditAI(profile, sig, completeness) {
+  const biz = profile.businessName || 'Business'
+  const city = profile.city || 'your area'
+  const cat = profile.category || 'Local Service'
+  const gaps = (completeness?.checks || []).filter((c) => !c.ok).map((c) => c.label)
+
+  const recs = []
+  if (gaps.includes('Rich description (80+ chars)')) {
+    recs.push({
+      title: 'Expand business description with local keywords',
+      category: 'Profile',
+      impact: 'high',
+      effort: 'low',
+      why: 'A detailed profile description helps Google understand your services and ranks you higher in local search results.',
+      howTo: `Add a 500+ character description mentioning ${biz}, ${cat} in ${city}, and key services.`,
+    })
+  }
+  if (gaps.includes('At least 3 services listed')) {
+    recs.push({
+      title: 'List all specific services offered',
+      category: 'Profile',
+      impact: 'high',
+      effort: 'low',
+      why: 'Google ranks profiles higher when specific service tags match user search queries.',
+      howTo: 'Navigate to Services in your Google Business Profile and add all treatments or products you offer.',
+    })
+  }
+  recs.push({
+    title: 'Actively generate fresh customer reviews',
+    category: 'Reviews',
+    impact: 'high',
+    effort: 'low',
+    why: 'Recent reviews are the #1 local ranking factor and significantly boost conversion rate.',
+    howTo: 'Share your niuronai QR code or direct review link with every customer right after service.',
+  })
+  recs.push({
+    title: 'Reply to all Google reviews within 24 hours',
+    category: 'Engagement',
+    impact: 'medium',
+    effort: 'low',
+    why: 'Google officially states that responding to reviews improves your local SEO ranking and customer trust.',
+    howTo: 'Use the Reviews inbox in niuronai with 1-click AI replies to respond to every customer.',
+  })
+  recs.push({
+    title: 'Add high-quality photos regularly',
+    category: 'Content',
+    impact: 'medium',
+    effort: 'medium',
+    why: 'Businesses with 10+ photos get 42% more direction requests on Google Maps.',
+    howTo: 'Upload clear photos of your clinic/store interior, exterior, team, and equipment weekly.',
+  })
+
+  return {
+    keywordsSeoScore: (completeness?.score || 50) > 70 ? 78 : 58,
+    summary: `${biz} has a solid foundation in ${city}. Focusing on complete profile fields, regular photo updates, and rapid review responses will drive strong local ranking improvements.`,
+    recommendations: recs,
+    optimizedDescription: `${biz} is a dedicated ${cat} serving ${city}. Committed to exceptional customer service, professional care, and quality results. Contact or visit us today in ${city}.`,
+    suggestedCategories: [cat, `${cat} Clinic`, 'Health & Medical'],
+    suggestedKeywords: [`best ${cat.toLowerCase()} in ${city}`, `${cat.toLowerCase()} near me`, `${biz} ${city}`],
+  }
+}
+
 async function generateAuditAI(profile, sig, completeness) {
   const services = (profile.services || []).join(', ')
   const gaps = (completeness.checks || []).filter((c) => !c.ok).map((c) => c.label)
@@ -442,21 +586,26 @@ async function generateAuditAI(profile, sig, completeness) {
     'Audit this profile and return the JSON object described above.',
   ].filter(Boolean).join('\n')
 
-  const content = await callLLM([
-    { role: 'system', content: system },
-    { role: 'user', content: user },
-  ], 0.6)
-
-  let obj = extractJsonObject(content)
-  if (!obj) {
-    const retry = await callLLM([
+  try {
+    const content = await callLLM([
       { role: 'system', content: system },
-      { role: 'user', content: user + '\n\nIMPORTANT: Output a raw JSON object only.' },
-    ], 0.5)
-    obj = extractJsonObject(retry)
+      { role: 'user', content: user },
+    ], 0.6)
+
+    let obj = extractJsonObject(content)
+    if (!obj) {
+      const retry = await callLLM([
+        { role: 'system', content: system },
+        { role: 'user', content: user + '\n\nIMPORTANT: Output a raw JSON object only.' },
+      ], 0.5)
+      obj = extractJsonObject(retry)
+    }
+    if (obj) return obj
+  } catch (err) {
+    console.warn('[AI:generateAuditAI] LLM call failed, using fallback audit:', err.message)
+    return buildFallbackAuditAI(profile, sig, completeness)
   }
-  if (!obj) throw new Error('Could not parse AI audit response')
-  return obj
+  return buildFallbackAuditAI(profile, sig, completeness)
 }
 
 async function runAudit(db, profile, campaignId, orgId) {
