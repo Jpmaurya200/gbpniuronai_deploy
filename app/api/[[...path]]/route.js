@@ -53,56 +53,126 @@ function slugify(str) {
 }
 
 // ---------------------------------------------------------------------------
-// AI Provider abstraction  ->  Gemini via Emergent universal gateway
+// AI Provider Abstraction: OpenRouter, Google Gemini, and Emergent Gateway
 // ---------------------------------------------------------------------------
-const LLM_URL = process.env.EMERGENT_LLM_URL || 'https://integrations.emergentagent.com/llm/chat/completions'
-const LLM_KEY = process.env.EMERGENT_LLM_KEY
-const LLM_MODEL = process.env.LLM_MODEL || 'vertex_ai/gemini-3-flash-preview'
+const LLM_MODEL = process.env.OPENROUTER_MODEL || process.env.GEMINI_MODEL || process.env.LLM_MODEL || 'gemini-1.5-flash'
 
-async function callLLM(messages, temperature = 0.85) {
-  const emergentKey = process.env.EMERGENT_LLM_KEY
-  const geminiKey = process.env.GEMINI_API_KEY || (emergentKey && emergentKey.startsWith('AIzaSy') ? emergentKey : null)
+async function callOpenRouter(apiKey, messages, temperature = 0.85, modelOverride = null) {
+  const model = modelOverride || process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001'
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'HTTP-Referer': process.env.NEXT_PUBLIC_BASE_URL || 'https://niuronai.com',
+      'X-Title': 'niuronai Local SEO',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+    }),
+  })
 
-  // 1. If key is a direct Google Gemini API key (starts with AIzaSy) or GEMINI_API_KEY is provided:
-  if (geminiKey) {
-    const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
-    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${geminiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ model, messages, temperature }),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      throw new Error(data?.error?.message || `Google Gemini request failed (${res.status})`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    // If the account has 0 balance and returns 402, automatically fall back to free model on OpenRouter
+    if (res.status === 402 && !modelOverride && !process.env.OPENROUTER_MODEL) {
+      console.warn('[OpenRouter] 402 Payment required for default model. Falling back to free model meta-llama/llama-3.3-70b-instruct:free')
+      return callOpenRouter(apiKey, messages, temperature, 'meta-llama/llama-3.3-70b-instruct:free')
     }
-    return data?.choices?.[0]?.message?.content || ''
+    const errMsg = data?.error?.message || `OpenRouter request failed (${res.status})`
+    throw new Error(errMsg)
   }
 
-  // 2. Otherwise use Emergent universal gateway
+  return data?.choices?.[0]?.message?.content || ''
+}
+
+async function callGemini(apiKey, messages, temperature = 0.85) {
+  const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model, messages, temperature }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(data?.error?.message || `Google Gemini request failed (${res.status})`)
+  }
+  return data?.choices?.[0]?.message?.content || ''
+}
+
+async function callEmergent(apiKey, messages, temperature = 0.85) {
   const llmUrl = process.env.EMERGENT_LLM_URL || 'https://integrations.emergentagent.com/llm/chat/completions'
-  const llmKey = emergentKey
   const llmModel = process.env.LLM_MODEL || 'vertex_ai/gemini-3-flash-preview'
-
-  if (!llmKey) {
-    throw new Error('Neither GEMINI_API_KEY nor EMERGENT_LLM_KEY is configured in environment variables.')
-  }
-
   const res = await fetch(llmUrl, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${llmKey}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ model: llmModel, messages, temperature }),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    throw new Error(data?.error?.message || `LLM request failed (${res.status})`)
+    throw new Error(data?.error?.message || `Emergent LLM request failed (${res.status})`)
   }
   return data?.choices?.[0]?.message?.content || ''
+}
+
+async function callLLM(messages, temperature = 0.85) {
+  const envEmergent = process.env.EMERGENT_LLM_KEY || ''
+
+  // 1. Auto-detect OpenRouter key (explicit OPENROUTER_API_KEY / OPENROUTER_KEY or prefixed with sk-or- or sk-)
+  const openrouterKey =
+    process.env.OPENROUTER_API_KEY ||
+    process.env.OPENROUTER_KEY ||
+    (envEmergent.startsWith('sk-or-') || envEmergent.startsWith('sk-') ? envEmergent : null)
+
+  // 2. Auto-detect Gemini key (explicit GEMINI_API_KEY or prefixed with AIzaSy)
+  const geminiKey =
+    process.env.GEMINI_API_KEY ||
+    (envEmergent.startsWith('AIzaSy') ? envEmergent : null)
+
+  // 3. Emergent universal gateway key
+  const emergentKey =
+    envEmergent && !envEmergent.startsWith('AIzaSy') && !envEmergent.startsWith('sk-or-') && !envEmergent.startsWith('sk-')
+      ? envEmergent
+      : null
+
+  const providers = []
+  if (openrouterKey) {
+    providers.push({ name: 'OpenRouter', fn: () => callOpenRouter(openrouterKey, messages, temperature) })
+  }
+  if (geminiKey) {
+    providers.push({ name: 'Google Gemini', fn: () => callGemini(geminiKey, messages, temperature) })
+  }
+  if (emergentKey) {
+    providers.push({ name: 'Emergent Gateway', fn: () => callEmergent(emergentKey, messages, temperature) })
+  }
+
+  if (providers.length === 0) {
+    throw new Error('No AI API key configured. Please set OPENROUTER_API_KEY or GEMINI_API_KEY in environment variables.')
+  }
+
+  let lastError = null
+  for (const provider of providers) {
+    try {
+      const content = await provider.fn()
+      if (content && typeof content === 'string' && content.trim()) {
+        return content
+      }
+    } catch (err) {
+      console.warn(`[AI Provider: ${provider.name}] failed: ${err.message}`)
+      lastError = err
+      // Seamlessly fall through to next provider if available
+    }
+  }
+
+  throw lastError || new Error('All configured AI providers failed to generate a response.')
 }
 
 function extractJsonArray(text) {
