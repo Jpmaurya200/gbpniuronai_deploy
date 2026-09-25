@@ -55,37 +55,67 @@ function slugify(str) {
 // ---------------------------------------------------------------------------
 // AI Provider Abstraction: OpenRouter, Google Gemini, and Emergent Gateway
 // ---------------------------------------------------------------------------
-const LLM_MODEL = process.env.OPENROUTER_MODEL || process.env.GEMINI_MODEL || process.env.LLM_MODEL || 'gemini-1.5-flash'
+const LLM_MODEL = process.env.OPENROUTER_MODEL || process.env.GEMINI_MODEL || process.env.LLM_MODEL || 'openrouter/free'
 
-async function callOpenRouter(apiKey, messages, temperature = 0.85, modelOverride = null) {
-  const model = modelOverride || process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001'
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'HTTP-Referer': process.env.NEXT_PUBLIC_BASE_URL || 'https://niuronai.com',
-      'X-Title': 'niuronai Local SEO',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-    }),
-  })
+const FREE_OPENROUTER_MODELS = [
+  'openrouter/free',
+  'google/gemma-4-31b-it:free',
+  'qwen/qwen3.8-27b:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-3.5-lightning:free',
+]
 
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    // If the account has 0 balance and returns 402, automatically fall back to free model on OpenRouter
-    if (res.status === 402 && !modelOverride && !process.env.OPENROUTER_MODEL) {
-      console.warn('[OpenRouter] 402 Payment required for default model. Falling back to free model meta-llama/llama-3.3-70b-instruct:free')
-      return callOpenRouter(apiKey, messages, temperature, 'meta-llama/llama-3.3-70b-instruct:free')
-    }
-    const errMsg = data?.error?.message || `OpenRouter request failed (${res.status})`
-    throw new Error(errMsg)
+async function callOpenRouter(apiKey, messages, temperature = 0.85) {
+  const cleanKey = String(apiKey || '').trim().replace(/^["']|["']$/g, '')
+  if (!cleanKey) throw new Error('OpenRouter API key is empty')
+
+  const initialModel = process.env.OPENROUTER_MODEL || 'openrouter/free'
+  const modelsToTry = [initialModel]
+  for (const fm of FREE_OPENROUTER_MODELS) {
+    if (!modelsToTry.includes(fm)) modelsToTry.push(fm)
   }
 
-  return data?.choices?.[0]?.message?.content || ''
+  let lastErr = null
+  for (const model of modelsToTry) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cleanKey}`,
+          'HTTP-Referer': process.env.NEXT_PUBLIC_BASE_URL || 'https://niuronai.com',
+          'X-Title': 'niuronai Local SEO',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
+        }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const errMsg = data?.error?.message || `OpenRouter request failed (${res.status})`
+        console.warn(`[OpenRouter: ${model}] HTTP ${res.status}: ${errMsg}`)
+        lastErr = new Error(errMsg)
+        // If 401 Unauthorized, key itself is invalid
+        if (res.status === 401) throw lastErr
+        // If 402 (Payment required / Insufficient credits), 404 (model not found), or 429, try next free model
+        continue
+      }
+
+      const content = data?.choices?.[0]?.message?.content || ''
+      if (content && typeof content === 'string' && content.trim()) {
+        return content
+      }
+    } catch (err) {
+      lastErr = err
+      if (err.message && err.message.includes('401')) throw err
+      console.warn(`[OpenRouter: ${model}] error:`, err.message)
+    }
+  }
+
+  throw lastErr || new Error('All OpenRouter models failed to respond.')
 }
 
 async function callGemini(apiKey, messages, temperature = 0.85) {
@@ -177,16 +207,61 @@ async function callLLM(messages, temperature = 0.85) {
 
 function extractJsonArray(text) {
   if (!text) return null
-  // strip code fences
-  let t = text.replace(/```json/gi, '').replace(/```/g, '').trim()
+  let t = String(text).replace(/```json/gi, '').replace(/```/g, '').trim()
+
+  // 1. Try parsing JSON array directly
   const start = t.indexOf('[')
   const end = t.lastIndexOf(']')
-  if (start === -1 || end === -1) return null
-  try {
-    return JSON.parse(t.slice(start, end + 1))
-  } catch (e) {
-    return null
+  if (start !== -1 && end !== -1 && end > start) {
+    const raw = t.slice(start, end + 1)
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    } catch (e) {
+      try {
+        const fixed = raw.replace(/,\s*([}\]])/g, '$1')
+        const parsed = JSON.parse(fixed)
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed
+      } catch (e2) {
+        // Continue to fallback parsers
+      }
+    }
   }
+
+  // 2. Fallback: Extract individual JSON objects with "style" and "text"
+  const objects = []
+  const objRegex = /\{[\s\S]*?"style"\s*:\s*"([^"]+)"[\s\S]*?"text"\s*:\s*"([^"]+)"[\s\S]*?\}/gi
+  let match
+  while ((match = objRegex.exec(t)) !== null) {
+    objects.push({ style: match[1], text: match[2].replace(/\\"/g, '"').trim() })
+  }
+  if (objects.length > 0) return objects
+
+  // 3. Fallback: Parse markdown or numbered list
+  const lines = t.split('\n')
+  const extracted = []
+  let curStyle = ''
+  let curText = ''
+
+  for (const line of lines) {
+    const l = line.trim()
+    const headerMatch = l.match(/^(?:(?:\d+|\*|-)\s*)?(?:\*\*)?(Natural & Concise|Detailed & Experience-Focused|Warm & Conversational|Concise|Detailed|Warm|Option\s*\d+)(?:\*\*)?[:\s-]+(.*)$/i)
+    if (headerMatch) {
+      if (curText.trim()) {
+        extracted.push({ style: curStyle || 'Natural & Concise', text: curText.trim() })
+      }
+      curStyle = headerMatch[1]
+      curText = headerMatch[2] ? headerMatch[2].replace(/^["']|["']$/g, '').trim() : ''
+    } else if (curStyle && l && !l.startsWith('#')) {
+      curText += ' ' + l.replace(/^["']|["']$/g, '').trim()
+    }
+  }
+  if (curText.trim()) {
+    extracted.push({ style: curStyle || 'Warm & Conversational', text: curText.trim() })
+  }
+  if (extracted.length > 0) return extracted
+
+  return null
 }
 
 const DRAFT_STYLES = [
@@ -195,24 +270,52 @@ const DRAFT_STYLES = [
   { key: 'warm', label: 'Warm & Conversational' },
 ]
 
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)]
+}
+
 function buildFallbackDrafts(campaign, experiences = [], customerText = '') {
   const biz = campaign.businessName || 'this business'
   const city = campaign.city ? ` in ${campaign.city}` : ''
   const expList = experiences.length ? experiences.join(', ') : 'great service'
   const note = customerText ? ` ${customerText.trim()}` : ''
 
+  const concisePool = [
+    `Had a wonderful experience at ${biz}${city}. Really impressed with the ${expList}!${note} Highly recommended.`,
+    `Excellent visit to ${biz}${city}. The ${expList} truly stood out.${note} Will be recommending to everyone!`,
+    `Top-notch experience with ${biz}${city}. Appreciated the ${expList} from start to finish.${note} 5 stars!`,
+    `Great visit to ${biz}. Everything was handled smoothly, especially the ${expList}.${note} Thank you!`,
+    `Very happy with my visit to ${biz}${city}. The focus on ${expList} made all the difference.${note}`,
+  ]
+
+  const detailedPool = [
+    `Visited ${biz} recently and was genuinely pleased with my experience. The ${expList} stood out immediately.${note} The team was attentive and very professional throughout. Will definitely be returning!`,
+    `I recently had an appointment at ${biz}${city} and cannot praise them enough. Their attention to ${expList} was evident throughout the entire visit.${note} Looking forward to coming back.`,
+    `If you are looking for quality care in ${city || 'the area'}, ${biz} is the place to go. The ${expList} was second to none.${note} Truly appreciate the great service shown during my visit.`,
+    `Very thorough and pleasant experience at ${biz}. You can tell they take immense pride in their ${expList}.${note} Everything went seamlessly from beginning to end!`,
+    `My visit to ${biz}${city} was exceptional. The commitment to ${expList} made me feel valued as a customer.${note} Highly deserving of all five stars.`,
+  ]
+
+  const warmPool = [
+    `So glad I visited ${biz}! Loved the ${expList}.${note} Thank you so much to the entire team for such good care. 5 stars all the way!`,
+    `Such a warm and welcoming experience at ${biz}${city}! The ${expList} made my day so much easier.${note} Heartfelt thanks to everyone there!`,
+    `Can't say enough good things about ${biz}! The ${expList} was fantastic and made me feel right at home.${note} Definitely coming back!`,
+    `Big thank you to the wonderful team at ${biz}${city}! Loved the ${expList} and the personalized support.${note} 10/10 experience!`,
+    `Truly grateful for the experience at ${biz}. Loved how caring and attentive they were, especially regarding ${expList}.${note} Thank you!`,
+  ]
+
   return [
     {
       style: 'Natural & Concise',
-      text: `Had a wonderful experience at ${biz}${city}. Really impressed with the ${expList}!${note} Highly recommended.`,
+      text: pickRandom(concisePool),
     },
     {
       style: 'Detailed & Experience-Focused',
-      text: `Visited ${biz} recently and was genuinely pleased with my experience. The ${expList} stood out immediately.${note} The team was attentive and very professional throughout. Will definitely be returning!`,
+      text: pickRandom(detailedPool),
     },
     {
       style: 'Warm & Conversational',
-      text: `So glad I visited ${biz}! Loved the ${expList}.${note} Thank you so much to the entire team for such good care. 5 stars all the way!`,
+      text: pickRandom(warmPool),
     },
   ]
 }
@@ -220,6 +323,7 @@ function buildFallbackDrafts(campaign, experiences = [], customerText = '') {
 async function generateReviewDrafts(campaign, experiences = [], customerText = '') {
   const services = (campaign.services || []).join(', ')
   const expList = (experiences || []).join(', ')
+  const nonce = Math.random().toString(36).slice(2, 7)
 
   const system = [
     'You help a real customer turn their genuine experience into an authentic, editable Google review draft.',
@@ -243,7 +347,8 @@ async function generateReviewDrafts(campaign, experiences = [], customerText = '
     `Customer selected these experiences: ${expList || '(none specified)'}`,
     customerText ? `Customer wrote (optional): "${customerText}"` : 'Customer left the optional note empty.',
     '',
-    'Produce exactly 3 DISTINCT review drafts, genuinely different from each other:',
+    `Variation seed: ${nonce}`,
+    'Produce exactly 3 DISTINCT, creative review drafts, genuinely different from each other:',
     '1) style "Natural & Concise" — short, 1-2 sentences.',
     '2) style "Detailed & Experience-Focused" — 3-4 sentences, focused on the experience.',
     '3) style "Warm & Conversational" — friendly and personable.',
@@ -256,7 +361,7 @@ async function generateReviewDrafts(campaign, experiences = [], customerText = '
     const content = await callLLM([
       { role: 'system', content: system },
       { role: 'user', content: user },
-    ])
+    ], 0.9)
 
     let arr = extractJsonArray(content)
     if (!Array.isArray(arr) || arr.length === 0) {
@@ -264,7 +369,7 @@ async function generateReviewDrafts(campaign, experiences = [], customerText = '
       const retry = await callLLM([
         { role: 'system', content: system },
         { role: 'user', content: user + '\n\nIMPORTANT: Output must be a raw JSON array only.' },
-      ])
+      ], 0.8)
       arr = extractJsonArray(retry)
     }
     if (Array.isArray(arr) && arr.length > 0) {
@@ -915,6 +1020,35 @@ async function handleRoute(request, { params }) {
     // Health
     if ((route === '/' || route === '/root') && method === 'GET') {
       return json({ ok: true, app: 'niuronai', model: LLM_MODEL })
+    }
+
+    // AI Status / Diagnostics (Verify LLM key & connectivity)
+    if (route === '/ai-status' && method === 'GET') {
+      const envEmergent = process.env.EMERGENT_LLM_KEY || ''
+      const hasOpenRouter = !!(process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY || envEmergent.startsWith('sk-or-') || envEmergent.startsWith('sk-'))
+      const hasGemini = !!(process.env.GEMINI_API_KEY || envEmergent.startsWith('AIzaSy'))
+      const hasEmergent = !!(envEmergent && !envEmergent.startsWith('AIzaSy') && !envEmergent.startsWith('sk-or-') && !envEmergent.startsWith('sk-'))
+
+      let testOutput = null
+      let testError = null
+      try {
+        testOutput = await callLLM([{ role: 'user', content: 'Say hello in 3 words' }], 0.7)
+      } catch (e) {
+        testError = e.message || String(e)
+      }
+
+      return json({
+        ok: !testError,
+        providersConfigured: {
+          openrouter: hasOpenRouter,
+          gemini: hasGemini,
+          emergent: hasEmergent,
+        },
+        model: process.env.OPENROUTER_MODEL || 'openrouter/free',
+        liveAiWorking: !!testOutput,
+        testResponse: testOutput ? testOutput.trim() : null,
+        error: testError,
+      })
     }
 
     // ==================== AUTH ====================

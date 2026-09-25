@@ -92,8 +92,14 @@ export default function ReviewPage({ params }) {
         const msg = data.detail ? `${data.error || 'Failed'}: ${data.detail}` : (data.error || 'Failed')
         throw new Error(msg)
       }
-      const pick = data.drafts[i % data.drafts.length] || data.drafts[0]
-      setDrafts((prev) => prev.map((d, idx) => (idx === i ? { ...d, text: pick.text } : d)))
+      const curText = drafts[i]?.text
+      const freshDraft = (data.drafts || []).find((d, idx) => idx === i && d.text !== curText) ||
+                         (data.drafts || []).find((d) => d.text !== curText) ||
+                         (data.drafts || [])[i % (data.drafts?.length || 1)] ||
+                         (data.drafts || [])[0]
+      if (freshDraft) {
+        setDrafts((prev) => prev.map((d, idx) => (idx === i ? { ...d, text: freshDraft.text } : d)))
+      }
       toast.success('Regenerated')
     } catch (e) { toast.error(e.message) } finally { setRegenIndex(-1) }
   }
