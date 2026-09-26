@@ -1181,7 +1181,7 @@ async function handleRoute(request, { params }) {
     if (route === '/auth/google' && method === 'GET') {
       if (!googleEnabled()) return json({ error: 'Google login is not configured' }, 400)
       const state = randomState()
-      const url = buildAuthUrl({ scope: LOGIN_SCOPE, redirectUri: loginRedirectUri(), state })
+      const url = buildAuthUrl({ scope: LOGIN_SCOPE, redirectUri: loginRedirectUri(request), state })
       const r = handleCORS(NextResponse.redirect(url))
       r.headers.append('Set-Cookie', stateCookie('oauth_login_state', state))
       return r
@@ -1194,7 +1194,7 @@ async function handleRoute(request, { params }) {
       const saved = readReqCookie(request, 'oauth_login_state')
       if (!state || !saved || state !== saved) return redirectTo('/login?error=state')
       try {
-        const tok = await exchangeCode(q.get('code'), loginRedirectUri())
+        const tok = await exchangeCode(q.get('code'), loginRedirectUri(request))
         const info = await getUserInfo(tok.access_token)
         if (!info.email || info.email_verified !== true) return redirectTo('/login?error=email_unverified')
         const email = String(info.email).toLowerCase()
@@ -1256,7 +1256,7 @@ async function handleRoute(request, { params }) {
       if (!auth?.org) return redirectTo('/login?next=/dashboard')
       if (!googleEnabled()) return json({ error: 'Google is not configured' }, 400)
       const state = randomState()
-      const url = buildAuthUrl({ scope: GBP_SCOPE, redirectUri: gbpRedirectUri(), state, offline: true })
+      const url = buildAuthUrl({ scope: GBP_SCOPE, redirectUri: gbpRedirectUri(request), state, offline: true })
       const r = handleCORS(NextResponse.redirect(url))
       r.headers.append('Set-Cookie', stateCookie('oauth_gbp_state', state))
       return r
@@ -1270,7 +1270,7 @@ async function handleRoute(request, { params }) {
       const saved = readReqCookie(request, 'oauth_gbp_state')
       if (!state || !saved || state !== saved) return redirectTo('/account?gbp=state')
       try {
-        const tok = await exchangeCode(q.get('code'), gbpRedirectUri())
+        const tok = await exchangeCode(q.get('code'), gbpRedirectUri(request))
         // Preserve an existing refresh token if Google omits one on re-consent.
         const existing = await db.collection('gbpConnections').findOne({ orgId: auth.org.id })
         const refreshSealed = tok.refresh_token ? sealToken(tok.refresh_token) : existing?.refreshTokenEnc
@@ -1323,6 +1323,8 @@ async function handleRoute(request, { params }) {
         locations: locations.map((l) => clean({ ...l, orgId: undefined })),
         locationLimit: plan?.limits?.locations ?? 1,
         googleEnabled: googleEnabled(),
+        redirectUri: gbpRedirectUri(request),
+        loginRedirectUri: loginRedirectUri(request),
       })
     }
 

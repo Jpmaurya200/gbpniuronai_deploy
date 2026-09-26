@@ -70,6 +70,30 @@ function BusinessProfileCard() {
           <div>
             <p className="mb-3 text-sm text-slate-500">Securely connect your Google Business Profile to sync locations, reviews and rankings. Your plan allows <b>{limit === -1 ? 'unlimited' : limit}</b> location{limit === 1 ? '' : 's'}.</p>
             <Button onClick={connect} className="bg-violet-600 hover:bg-violet-700"><Link2 className="mr-1.5 h-4 w-4" /> Connect Google Business Profile</Button>
+
+            {data?.redirectUri && (
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-700">Google Cloud Console Redirect URI:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(data.redirectUri)
+                      toast.success('Redirect URI copied to clipboard!')
+                    }}
+                    className="flex items-center gap-1 font-sans text-xs font-semibold text-violet-600 hover:text-violet-700"
+                  >
+                    Copy URI
+                  </button>
+                </div>
+                <div className="mt-1.5 truncate rounded border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11px] text-slate-800">
+                  {data.redirectUri}
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Make sure this exact URI is listed in <b>Authorized redirect URIs</b> in Google Cloud Console.
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
@@ -419,6 +443,24 @@ export default function AccountPage() {
       setPhone(org.billingProfile?.phone || '')
     }
   }, [org])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const gbp = params.get('gbp')
+    if (gbp === 'connected') {
+      const count = params.get('count') || '0'
+      toast.success(`Google Business Profile connected! (${count} location${count === '1' ? '' : 's'} linked)`)
+    } else if (gbp === 'denied') {
+      toast.error('Google authorization was cancelled or denied.')
+    } else if (gbp === 'norefresh') {
+      toast.error('Google did not return a refresh token. Try revoking app access in Google Account permissions and reconnecting.')
+    } else if (gbp === 'state') {
+      toast.error('OAuth security state verification failed. Please try again.')
+    } else if (gbp === 'failed') {
+      toast.error('Google connection failed. Check Authorized redirect URIs in Google Cloud Console.')
+    }
+  }, [])
 
   if (loading || !user) return <AuthGate />
 
