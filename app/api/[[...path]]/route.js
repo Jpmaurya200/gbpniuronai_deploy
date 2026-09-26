@@ -10,6 +10,7 @@ import { razorpayEnabled, getRazorpay, publicKeyId, verifyPaymentSignature, veri
 import { sendEmail, sendWelcomeEmail, sendInvoiceEmail, sendReviewAlertEmail, sendTeamInviteEmail } from '@/lib/mailer'
 import {
   googleEnabled, buildAuthUrl, exchangeCode, getUserInfo, listAccounts, listLocations,
+  fetchAllBusinessLocations,
   sealToken, unsealToken, refreshAccessToken, listGoogleReviews, publishGoogleReviewReply, starRatingToNumber,
   normalizeLocation, GBP_SCOPE, LOGIN_SCOPE, loginRedirectUri, gbpRedirectUri, randomState,
   signOAuthState, verifyOAuthState, baseUrl,
@@ -1295,24 +1296,27 @@ async function handleRoute(request, { params }) {
         let cap = plan?.limits?.locations
         if (cap === undefined) cap = 1
         if (cap === -1) cap = 1000
-        // Fetch accounts + locations (may fail if GBP API access not yet granted).
-        let stored = 0, warn = null
+        // Fetch accounts + locations with multi-strategy fallbacks
+        let stored = 0, warn = null, lastSyncError = null
         try {
-          const accounts = await listAccounts(tok.access_token)
-          const locs = []
-          for (const acc of accounts) {
-            if (locs.length >= cap) break
-            const l = await listLocations(tok.access_token, acc.name, cap - locs.length)
-            locs.push(...l.map((x) => ({ ...normalizeLocation(x), accountName: acc.name })))
-          }
-          await db.collection('gbpLocations').deleteMany({ orgId: targetOrgId })
+          const { locations: locs, errors } = await fetchAllBusinessLocations(tok.access_token, cap)
+          await db.collection('gbpLocations').deleteMany({ orgId: targetOrgId, isManual: { $ne: true } })
           if (locs.length) {
-            await db.collection('gbpLocations').insertMany(locs.map((x) => ({ id: uuidv4(), orgId: targetOrgId, ...x, createdAt: new Date() })))
+            await db.collection('gbpLocations').insertMany(locs.map((x) => ({ id: uuidv4(), orgId: targetOrgId, isManual: false, ...x, createdAt: new Date() })))
           }
           stored = locs.length
+          if (stored === 0 && errors.length) {
+            lastSyncError = errors.join('; ')
+            warn = 'api_access'
+          }
         } catch (apiErr) {
+          lastSyncError = apiErr.message || String(apiErr)
           warn = apiErr.status === 403 ? 'api_access' : 'api_error'
         }
+        await db.collection('gbpConnections').updateOne(
+          { orgId: targetOrgId },
+          { $set: { lastSyncError: lastSyncError || null, lastSyncAt: new Date() } }
+        )
         await notify(db, targetOrgId, targetUserId, 'gbp_connected', 'Google Business Profile connected', stored ? `${stored} location(s) linked to your workspace.` : 'Your Google account is connected. Locations will sync once Business Profile API access is granted.')
         const r = redirect(`/account?gbp=connected&count=${stored}${warn ? `&warn=${warn}` : ''}`)
         r.headers.append('Set-Cookie', stateCookie('oauth_gbp_state', '', 0))
@@ -1334,12 +1338,91 @@ async function handleRoute(request, { params }) {
       return json({
         connected: !!conn,
         connectedAt: conn?.googleConnectedAt || null,
+        lastSyncError: conn?.lastSyncError || null,
+        scope: conn?.scope || null,
+        hasBusinessScope: conn?.scope ? conn.scope.includes('business.manage') : true,
         locations: locations.map((l) => clean({ ...l, orgId: undefined })),
         locationLimit: plan?.limits?.locations ?? 1,
         googleEnabled: googleEnabled(),
         redirectUri: gbpRedirectUri(request),
         loginRedirectUri: loginRedirectUri(request),
       })
+    }
+
+    if (route === '/gbp/sync' && method === 'POST') {
+      if (!auth?.org) return json({ error: 'unauthorized' }, 401)
+      const conn = await db.collection('gbpConnections').findOne({ orgId: auth.org.id })
+      if (!conn?.refreshTokenEnc) return json({ error: 'Google Business Profile is not connected' }, 400)
+
+      let tok
+      try {
+        const refreshToken = unsealToken(conn.refreshTokenEnc)
+        tok = await refreshAccessToken(refreshToken)
+      } catch (tokErr) {
+        return json({ error: 'Google token refresh failed. Please reconnect Google Business Profile in Account settings.', detail: tokErr.message }, 400)
+      }
+
+      const { plan } = await getActivePlan(db, auth.org.id)
+      let cap = plan?.limits?.locations
+      if (cap === undefined) cap = 1
+      if (cap === -1) cap = 1000
+
+      const { locations: locs, errors } = await fetchAllBusinessLocations(tok.access_token, cap)
+      if (locs.length > 0) {
+        await db.collection('gbpLocations').deleteMany({ orgId: auth.org.id, isManual: { $ne: true } })
+        await db.collection('gbpLocations').insertMany(locs.map((x) => ({ id: uuidv4(), orgId: auth.org.id, isManual: false, ...x, createdAt: new Date() })))
+        await db.collection('gbpConnections').updateOne(
+          { orgId: auth.org.id },
+          { $set: { lastSyncError: null, lastSyncAt: new Date() } }
+        )
+        await notify(db, auth.org.id, auth.user.id, 'gbp_connected', 'Google Business Profile synced', `${locs.length} location(s) linked to your workspace.`)
+        return json({ ok: true, count: locs.length, locations: locs })
+      } else {
+        const errMsg = errors.length ? errors.join(' | ') : 'No locations found on this Google account.'
+        await db.collection('gbpConnections').updateOne(
+          { orgId: auth.org.id },
+          { $set: { lastSyncError: errMsg, lastSyncAt: new Date() } }
+        )
+        return json({ ok: false, count: 0, error: errMsg, errors })
+      }
+    }
+
+    if (route === '/gbp/location/manual' && method === 'POST') {
+      if (!auth?.org) return json({ error: 'unauthorized' }, 401)
+      const body = await request.json().catch(() => ({}))
+      const title = String(body.title || body.businessName || '').trim()
+      if (!title) return json({ error: 'Business name is required' }, 400)
+
+      const { plan } = await getActivePlan(db, auth.org.id)
+      let cap = plan?.limits?.locations ?? 1
+      if (cap !== -1) {
+        const count = await db.collection('gbpLocations').countDocuments({ orgId: auth.org.id })
+        if (count >= cap) return json({ error: `Location limit reached (${cap} max for your plan). Upgrade to add more.` }, 402)
+      }
+
+      const newLoc = {
+        id: uuidv4(),
+        orgId: auth.org.id,
+        isManual: true,
+        resourceName: `locations/manual-${uuidv4().slice(0, 8)}`,
+        title,
+        address: String(body.address || body.city || '').trim(),
+        mapsUri: String(body.mapsUri || body.googleReviewUrl || '').trim(),
+        placeId: String(body.placeId || '').trim(),
+        primaryPhone: String(body.phone || '').trim(),
+        websiteUri: String(body.website || '').trim(),
+        createdAt: new Date(),
+      }
+
+      await db.collection('gbpLocations').insertOne(newLoc)
+      return json({ ok: true, location: clean({ ...newLoc, orgId: undefined }) })
+    }
+
+    if (route.startsWith('/gbp/location/') && method === 'DELETE') {
+      if (!auth?.org) return json({ error: 'unauthorized' }, 401)
+      const locId = route.split('/')[3]
+      await db.collection('gbpLocations').deleteOne({ id: locId, orgId: auth.org.id })
+      return json({ ok: true })
     }
 
     if (route === '/gbp/disconnect' && method === 'POST') {

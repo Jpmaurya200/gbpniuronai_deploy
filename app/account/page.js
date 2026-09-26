@@ -19,6 +19,7 @@ import {
   User as UserIcon, Building2, CreditCard, Shield, ArrowRight,
   MapPin, Loader2, CheckCircle2, Link2, Store, AlertTriangle,
   Pencil, KeyRound, Receipt, Users, UserPlus, Trash2, Mail,
+  Plus, RefreshCw,
 } from 'lucide-react'
 
 const fetcher = (url) => fetch(url).then((r) => r.json())
@@ -36,6 +37,12 @@ function Row({ label, value }) {
 function BusinessProfileCard() {
   const { data, mutate, isLoading } = useSWR('/api/gbp/status', (u) => fetch(u).then((r) => r.json()))
   const [disc, setDisc] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [addManualOpen, setAddManualOpen] = useState(false)
+  const [manualForm, setManualForm] = useState({ title: '', address: '', mapsUri: '', phone: '' })
+  const [savingManual, setSavingManual] = useState(false)
+  const [deletingId, setDeletingId] = useState(null)
+
   const connected = data?.connected
   const locations = data?.locations || []
   const limit = data?.locationLimit
@@ -51,80 +58,253 @@ function BusinessProfileCard() {
     } catch (e) { toast.error('Could not disconnect') } finally { setDisc(false) }
   }
 
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-base"><Store className="h-4 w-4 text-violet-600" /> Google Business Profile</CardTitle>
-          {connected ? <Badge className="bg-emerald-600">Connected</Badge> : <Badge variant="secondary">Not connected</Badge>}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="py-6 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" /></div>
-        ) : !googleOn ? (
-          <div className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" /> Google connection is being configured. Check back shortly.
-          </div>
-        ) : !connected ? (
-          <div>
-            <p className="mb-3 text-sm text-slate-500">Securely connect your Google Business Profile to sync locations, reviews and rankings. Your plan allows <b>{limit === -1 ? 'unlimited' : limit}</b> location{limit === 1 ? '' : 's'}.</p>
-            <Button onClick={connect} className="bg-violet-600 hover:bg-violet-700"><Link2 className="mr-1.5 h-4 w-4" /> Connect Google Business Profile</Button>
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/gbp/sync', { method: 'POST' })
+      const d = await res.json()
+      if (d.ok) {
+        toast.success(`Successfully synced ${d.count} location(s) from Google!`)
+        mutate()
+      } else {
+        toast.error(d.error || 'Could not sync locations from Google')
+        mutate()
+      }
+    } catch (err) {
+      toast.error(err.message || 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
 
-            {data?.redirectUri && (
-              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-700">Google Cloud Console Redirect URI:</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(data.redirectUri)
-                      toast.success('Redirect URI copied to clipboard!')
-                    }}
-                    className="flex items-center gap-1 font-sans text-xs font-semibold text-violet-600 hover:text-violet-700"
-                  >
-                    Copy URI
-                  </button>
-                </div>
-                <div className="mt-1.5 truncate rounded border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11px] text-slate-800">
-                  {data.redirectUri}
-                </div>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Make sure this exact URI is listed in <b>Authorized redirect URIs</b> in Google Cloud Console.
-                </p>
-              </div>
-            )}
+  const handleAddManual = async (e) => {
+    e.preventDefault()
+    if (!manualForm.title.trim()) {
+      toast.error('Business name is required')
+      return
+    }
+    setSavingManual(true)
+    try {
+      const res = await fetch('/api/gbp/location/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(manualForm),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Could not add location')
+      toast.success(`Added "${manualForm.title}" successfully!`)
+      setManualForm({ title: '', address: '', mapsUri: '', phone: '' })
+      setAddManualOpen(false)
+      mutate()
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setSavingManual(false)
+    }
+  }
+
+  const handleDeleteLocation = async (id, title) => {
+    if (!confirm(`Are you sure you want to remove "${title}"?`)) return
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/gbp/location/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Could not delete location')
+      toast.success('Location removed')
+      mutate()
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-base"><Store className="h-4 w-4 text-violet-600" /> Google Business Profile</CardTitle>
+            {connected ? <Badge className="bg-emerald-600">Connected</Badge> : <Badge variant="secondary">Not connected</Badge>}
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-500">{locations.length} of {limit === -1 ? '∞' : limit} location{locations.length === 1 ? '' : 's'} linked</p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={connect}>Re-sync</Button>
-                <Button size="sm" variant="outline" className="text-rose-600 hover:text-rose-700" onClick={disconnect} disabled={disc}>{disc ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Disconnect'}</Button>
-              </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="py-6 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-400" /></div>
+          ) : !googleOn ? (
+            <div className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" /> Google connection is being configured. Check back shortly.
             </div>
-            {locations.length === 0 ? (
-              <div className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-xs text-amber-700">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-none" /> Connected, but no locations synced yet. This usually means Business Profile API access is still pending approval on your Google project. Click Re-sync once granted.
+          ) : !connected ? (
+            <div>
+              <p className="mb-3 text-sm text-slate-500">Securely connect your Google Business Profile to sync locations, reviews and rankings. Your plan allows <b>{limit === -1 ? 'unlimited' : limit}</b> location{limit === 1 ? '' : 's'}.</p>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={connect} className="bg-violet-600 hover:bg-violet-700"><Link2 className="mr-1.5 h-4 w-4" /> Connect Google Business Profile</Button>
+                <Button variant="outline" onClick={() => setAddManualOpen(true)}><Plus className="mr-1.5 h-4 w-4" /> Add Location Manually</Button>
               </div>
-            ) : (
-              <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
-                {locations.map((l) => (
-                  <div key={l.resourceName} className="flex items-start gap-2.5 px-3 py-2.5">
-                    <MapPin className="mt-0.5 h-4 w-4 flex-none text-violet-500" />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-900">{l.title || l.resourceName}</p>
-                      {l.address && <p className="truncate text-xs text-slate-400">{l.address}</p>}
+
+              {data?.redirectUri && (
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-700">Google Cloud Console Redirect URI:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(data.redirectUri)
+                        toast.success('Redirect URI copied to clipboard!')
+                      }}
+                      className="flex items-center gap-1 font-sans text-xs font-semibold text-violet-600 hover:text-violet-700"
+                    >
+                      Copy URI
+                    </button>
+                  </div>
+                  <div className="mt-1.5 truncate rounded border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11px] text-slate-800">
+                    {data.redirectUri}
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Make sure this exact URI is listed in <b>Authorized redirect URIs</b> in Google Cloud Console.
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <p className="text-sm text-slate-500">{locations.length} of {limit === -1 ? '∞' : limit} location{locations.length === 1 ? '' : 's'} linked</p>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={handleSync} disabled={syncing}>
+                    {syncing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                    {syncing ? 'Syncing...' : 'Re-sync Google'}
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-violet-700 hover:text-violet-800" onClick={() => setAddManualOpen(true)}>
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Add Location
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-rose-600 hover:text-rose-700" onClick={disconnect} disabled={disc}>
+                    {disc ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Disconnect'}
+                  </Button>
+                </div>
+              </div>
+
+              {locations.length === 0 ? (
+                <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-amber-600" />
+                    <div className="space-y-1.5">
+                      <p className="font-semibold text-amber-900">Connected, but no locations synced yet.</p>
+                      <p>This happens when Google Business Profile API is awaiting approval or the listing is under a different account group.</p>
+                      {data?.lastSyncError && (
+                        <div className="rounded bg-amber-100/80 p-2 font-mono text-[11px] text-amber-950 break-words">
+                          <b>Google Diagnostic:</b> {data.lastSyncError}
+                        </div>
+                      )}
+                      <div className="pt-1 flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" className="h-7 text-xs bg-white" onClick={handleSync} disabled={syncing}>
+                          {syncing ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                          Re-sync with Google
+                        </Button>
+                        <Button size="sm" className="h-7 text-xs bg-violet-600 hover:bg-violet-700 text-white" onClick={() => setAddManualOpen(true)}>
+                          <Plus className="h-3 w-3 mr-1" /> Add Location Manually
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+                  {locations.map((l) => (
+                    <div key={l.id || l.resourceName} className="flex items-center justify-between px-3 py-2.5">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <MapPin className="mt-0.5 h-4 w-4 flex-none text-violet-500" />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <p className="truncate text-sm font-medium text-slate-900">{l.title || l.resourceName}</p>
+                            {l.isManual ? (
+                              <Badge variant="outline" className="text-[10px] py-0 px-1 text-slate-500">Manual</Badge>
+                            ) : (
+                              <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] py-0 px-1">Google</Badge>
+                            )}
+                          </div>
+                          {l.address && <p className="truncate text-xs text-slate-400">{l.address}</p>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {l.mapsUri && (
+                          <a href={l.mapsUri} target="_blank" rel="noopener noreferrer" className="p-1 text-slate-400 hover:text-violet-600 text-xs">
+                            <Link2 className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-slate-400 hover:text-rose-600"
+                          onClick={() => handleDeleteLocation(l.id, l.title)}
+                          disabled={deletingId === l.id}
+                        >
+                          {deletingId === l.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={addManualOpen} onOpenChange={setAddManualOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Business Location</DialogTitle>
+            <DialogDescription>
+              Link your business name and Google Maps review link so campaigns and reviews can start immediately.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddManual} className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Business Name *</Label>
+              <Input
+                required
+                value={manualForm.title}
+                onChange={(e) => setManualForm({ ...manualForm, title: e.target.value })}
+                placeholder="e.g. Aroma Bistro & Cafe"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Address / City</Label>
+              <Input
+                value={manualForm.address}
+                onChange={(e) => setManualForm({ ...manualForm, address: e.target.value })}
+                placeholder="e.g. Connaught Place, New Delhi"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Google Maps / Review URL</Label>
+              <Input
+                value={manualForm.mapsUri}
+                onChange={(e) => setManualForm({ ...manualForm, mapsUri: e.target.value })}
+                placeholder="https://g.page/r/... or https://maps.app.goo.gl/..."
+              />
+              <p className="text-[11px] text-slate-400">Where customers will be redirected to leave a review.</p>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Phone Number (Optional)</Label>
+              <Input
+                value={manualForm.phone}
+                onChange={(e) => setManualForm({ ...manualForm, phone: e.target.value })}
+                placeholder="+91 98765 43210"
+              />
+            </div>
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setAddManualOpen(false)}>Cancel</Button>
+              <Button type="submit" className="bg-violet-600 hover:bg-violet-700" disabled={savingManual}>
+                {savingManual ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                Save Location
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
