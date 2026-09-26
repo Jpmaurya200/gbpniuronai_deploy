@@ -46,7 +46,21 @@ export default function Landing() {
   const [openFaq, setOpenFaq] = useState(0)
 
   useEffect(() => {
-    fetch('/api/plans').then((r) => r.json()).then((d) => setPlans(Array.isArray(d) ? d : [])).catch(() => {})
+    fetch('/api/plans')
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d)) {
+          const seen = new Set()
+          const unique = d.filter((p) => {
+            const k = p.slug || p.id || p.name
+            if (!k || seen.has(k)) return false
+            seen.add(k)
+            return true
+          })
+          setPlans(unique)
+        }
+      })
+      .catch(() => {})
     fetch('/api/auth/me').then((r) => r.json()).then((d) => setMe(d.user || null)).catch(() => {})
   }, [])
 

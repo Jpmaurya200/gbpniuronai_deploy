@@ -67,7 +67,16 @@ export default function BillingPage() {
   const [paying, setPaying] = useState(false)
   const [success, setSuccess] = useState(null)
 
-  const plans = Array.isArray(plansRaw) ? plansRaw : []
+  const plans = useMemo(() => {
+    if (!Array.isArray(plansRaw)) return []
+    const seen = new Set()
+    return plansRaw.filter((p) => {
+      const k = p.slug || p.id || p.name
+      if (!k || seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
+  }, [plansRaw])
   const currentPlanId = ent?.plan?.id
   const sub = ent?.subscription
 

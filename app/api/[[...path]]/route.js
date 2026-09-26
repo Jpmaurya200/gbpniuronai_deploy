@@ -1749,7 +1749,16 @@ async function handleRoute(request, { params }) {
     // ==================== PUBLIC PLANS (for landing/pricing) ====================
     if (route === '/plans' && method === 'GET') {
       const plans = await db.collection('plans').find({ isActive: true, isPublic: true }).sort({ sortOrder: 1 }).toArray()
-      return json(plans.map(clean))
+      const seen = new Set()
+      const unique = []
+      for (const p of plans) {
+        const key = p.slug || p.id
+        if (!seen.has(key)) {
+          seen.add(key)
+          unique.push(clean(p))
+        }
+      }
+      return json(unique)
     }
 
     // ==================== ACCOUNT: entitlements + notifications ====================
