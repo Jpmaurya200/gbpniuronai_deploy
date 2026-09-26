@@ -12,6 +12,7 @@ import {
   googleEnabled, buildAuthUrl, exchangeCode, getUserInfo, listAccounts, listLocations,
   sealToken, unsealToken, refreshAccessToken, listGoogleReviews, publishGoogleReviewReply, starRatingToNumber,
   normalizeLocation, GBP_SCOPE, LOGIN_SCOPE, loginRedirectUri, gbpRedirectUri, randomState,
+  signOAuthState, verifyOAuthState, baseUrl,
 } from '@/lib/google'
 
 function handleCORS(response) {
@@ -39,8 +40,8 @@ function readReqCookie(request, name) {
 function stateCookie(name, value, maxAge = 600) {
   return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAge}`
 }
-function redirectTo(pathAndQuery) {
-  const base = (process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000').replace(/\/$/, '')
+function redirectTo(pathAndQuery, req = null) {
+  const base = baseUrl(req)
   return handleCORS(NextResponse.redirect(`${base}${pathAndQuery}`))
 }
 
@@ -1011,6 +1012,7 @@ async function handleRoute(request, { params }) {
   const { path = [] } = await params
   const route = `/${path.join('/')}`
   const method = request.method
+  const redirect = (pathAndQuery) => redirectTo(pathAndQuery, request)
 
   try {
     const db = await connectToMongo()
@@ -1180,7 +1182,7 @@ async function handleRoute(request, { params }) {
 
     if (route === '/auth/google' && method === 'GET') {
       if (!googleEnabled()) return json({ error: 'Google login is not configured' }, 400)
-      const state = randomState()
+      const state = signOAuthState({ type: 'login' })
       const url = buildAuthUrl({ scope: LOGIN_SCOPE, redirectUri: loginRedirectUri(request), state })
       const r = handleCORS(NextResponse.redirect(url))
       r.headers.append('Set-Cookie', stateCookie('oauth_login_state', state))
@@ -1189,14 +1191,16 @@ async function handleRoute(request, { params }) {
 
     if (route === '/auth/google/callback' && method === 'GET') {
       const q = request.nextUrl.searchParams
-      if (q.get('error')) return redirectTo('/login?error=google_denied')
+      if (q.get('error')) return redirect('/login?error=google_denied')
       const state = q.get('state')
+      const verified = verifyOAuthState(state)
       const saved = readReqCookie(request, 'oauth_login_state')
-      if (!state || !saved || state !== saved) return redirectTo('/login?error=state')
+      const isValid = (verified && verified.type === 'login') || (state && saved && state === saved)
+      if (!isValid) return redirect('/login?error=state')
       try {
         const tok = await exchangeCode(q.get('code'), loginRedirectUri(request))
         const info = await getUserInfo(tok.access_token)
-        if (!info.email || info.email_verified !== true) return redirectTo('/login?error=email_unverified')
+        if (!info.email || info.email_verified !== true) return redirect('/login?error=email_unverified')
         const email = String(info.email).toLowerCase()
         const users = db.collection('users')
         let user = await users.findOne({ googleId: info.sub }) || await users.findOne({ email })
@@ -1242,20 +1246,20 @@ async function handleRoute(request, { params }) {
           }
         }
         const token = signToken({ uid: user.id, orgId: user.orgId })
-        const r = redirectTo('/dashboard')
+        const r = redirect('/dashboard')
         r.headers.append('Set-Cookie', serializeSession(token))
         r.headers.append('Set-Cookie', stateCookie('oauth_login_state', '', 0))
         return r
       } catch (e) {
-        return redirectTo('/login?error=google_failed')
+        return redirect('/login?error=google_failed')
       }
     }
 
     // ==================== GOOGLE BUSINESS PROFILE (connect) ====================
     if (route === '/gbp/connect' && method === 'GET') {
-      if (!auth?.org) return redirectTo('/login?next=/dashboard')
+      if (!auth?.org) return redirect('/login?next=/account')
       if (!googleEnabled()) return json({ error: 'Google is not configured' }, 400)
-      const state = randomState()
+      const state = signOAuthState({ orgId: auth.org.id, userId: auth.user.id, type: 'gbp' })
       const url = buildAuthUrl({ scope: GBP_SCOPE, redirectUri: gbpRedirectUri(request), state, offline: true })
       const r = handleCORS(NextResponse.redirect(url))
       r.headers.append('Set-Cookie', stateCookie('oauth_gbp_state', state))
@@ -1263,25 +1267,31 @@ async function handleRoute(request, { params }) {
     }
 
     if (route === '/gbp/callback' && method === 'GET') {
-      if (!auth?.org) return redirectTo('/login')
       const q = request.nextUrl.searchParams
-      if (q.get('error')) return redirectTo('/account?gbp=denied')
+      if (q.get('error')) return redirect('/account?gbp=denied')
       const state = q.get('state')
+      const verified = verifyOAuthState(state)
       const saved = readReqCookie(request, 'oauth_gbp_state')
-      if (!state || !saved || state !== saved) return redirectTo('/account?gbp=state')
+      const isValid = (verified && verified.type === 'gbp') || (state && saved && state === saved)
+      if (!isValid) return redirect('/account?gbp=state')
+
+      const targetOrgId = auth?.org?.id || verified?.orgId
+      const targetUserId = auth?.user?.id || verified?.userId
+      if (!targetOrgId || !targetUserId) return redirect('/login?next=/account')
+
       try {
         const tok = await exchangeCode(q.get('code'), gbpRedirectUri(request))
         // Preserve an existing refresh token if Google omits one on re-consent.
-        const existing = await db.collection('gbpConnections').findOne({ orgId: auth.org.id })
+        const existing = await db.collection('gbpConnections').findOne({ orgId: targetOrgId })
         const refreshSealed = tok.refresh_token ? sealToken(tok.refresh_token) : existing?.refreshTokenEnc
-        if (!refreshSealed) return redirectTo('/account?gbp=norefresh')
+        if (!refreshSealed) return redirect('/account?gbp=norefresh')
         await db.collection('gbpConnections').updateOne(
-          { orgId: auth.org.id },
-          { $set: { orgId: auth.org.id, userId: auth.user.id, refreshTokenEnc: refreshSealed, scope: tok.scope || GBP_SCOPE, googleConnectedAt: new Date(), updatedAt: new Date() } },
+          { orgId: targetOrgId },
+          { $set: { orgId: targetOrgId, userId: targetUserId, refreshTokenEnc: refreshSealed, scope: tok.scope || GBP_SCOPE, googleConnectedAt: new Date(), updatedAt: new Date() } },
           { upsert: true }
         )
         // Determine plan location cap.
-        const { plan } = await getActivePlan(db, auth.org.id)
+        const { plan } = await getActivePlan(db, targetOrgId)
         let cap = plan?.limits?.locations
         if (cap === undefined) cap = 1
         if (cap === -1) cap = 1000
@@ -1295,20 +1305,24 @@ async function handleRoute(request, { params }) {
             const l = await listLocations(tok.access_token, acc.name, cap - locs.length)
             locs.push(...l.map((x) => ({ ...normalizeLocation(x), accountName: acc.name })))
           }
-          await db.collection('gbpLocations').deleteMany({ orgId: auth.org.id })
+          await db.collection('gbpLocations').deleteMany({ orgId: targetOrgId })
           if (locs.length) {
-            await db.collection('gbpLocations').insertMany(locs.map((x) => ({ id: uuidv4(), orgId: auth.org.id, ...x, createdAt: new Date() })))
+            await db.collection('gbpLocations').insertMany(locs.map((x) => ({ id: uuidv4(), orgId: targetOrgId, ...x, createdAt: new Date() })))
           }
           stored = locs.length
         } catch (apiErr) {
           warn = apiErr.status === 403 ? 'api_access' : 'api_error'
         }
-        await notify(db, auth.org.id, auth.user.id, 'gbp_connected', 'Google Business Profile connected', stored ? `${stored} location(s) linked to your workspace.` : 'Your Google account is connected. Locations will sync once Business Profile API access is granted.')
-        const r = redirectTo(`/account?gbp=connected&count=${stored}${warn ? `&warn=${warn}` : ''}`)
+        await notify(db, targetOrgId, targetUserId, 'gbp_connected', 'Google Business Profile connected', stored ? `${stored} location(s) linked to your workspace.` : 'Your Google account is connected. Locations will sync once Business Profile API access is granted.')
+        const r = redirect(`/account?gbp=connected&count=${stored}${warn ? `&warn=${warn}` : ''}`)
         r.headers.append('Set-Cookie', stateCookie('oauth_gbp_state', '', 0))
+        if (!auth?.user && targetUserId && targetOrgId) {
+          const sessionToken = signToken({ uid: targetUserId, orgId: targetOrgId })
+          r.headers.append('Set-Cookie', serializeSession(sessionToken))
+        }
         return r
       } catch (e) {
-        return redirectTo('/account?gbp=failed')
+        return redirect('/account?gbp=failed')
       }
     }
 
