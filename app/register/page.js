@@ -84,7 +84,7 @@ export default function RegisterPage() {
   return (
     <AuthShell
       title={inviteToken ? 'Accept Team Invitation' : 'Create your account'}
-      subtitle={inviteToken ? 'Complete your details to collaborate with your team on niuronai.' : 'Start free — no credit card required. Set up in under a minute.'}
+      subtitle={inviteToken ? 'Complete your details to collaborate with your team on niuronai.' : 'Create your account and start your 14-day trial for just ₹199.'}
       footer={<>Already have an account? <Link href="/login" className="font-semibold text-violet-600 hover:text-violet-700">Sign in</Link></>}
     >
       <GoogleButton enabled={googleOn} />
@@ -115,7 +115,7 @@ export default function RegisterPage() {
           </p>
         </div>
         <Button type="submit" disabled={busy} className="w-full bg-violet-600 hover:bg-violet-700">
-          {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Creating account…</> : 'Create free account'}
+          {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Creating account…</> : 'Create account'}
         </Button>
         <p className="text-center text-xs leading-relaxed text-slate-400">
           By creating an account you agree to our Terms of Service and Privacy Policy.
