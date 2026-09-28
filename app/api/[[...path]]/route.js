@@ -1798,7 +1798,8 @@ async function handleRoute(request, { params }) {
       const body = await request.json().catch(() => ({}))
       const plan = await db.collection('plans').findOne({ id: body.planId })
       if (!plan || !plan.isActive) return json({ error: 'Plan not found' }, 404)
-      const interval = body.interval === 'yearly' ? 'yearly' : 'monthly'
+      const validIntervals = ['trial', '1month', '3month', '6month', '12month', 'monthly', 'yearly']
+      const interval = validIntervals.includes(body.interval) ? body.interval : '1month'
       const currency = 'INR'
       const amount = planPrice(plan, interval, currency)
       const settings = await getSettings(db)

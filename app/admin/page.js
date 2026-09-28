@@ -125,18 +125,21 @@ function UsersTab() {
 
 /* -------------------------------- Plans --------------------------------- */
 const emptyPlan = () => ({
-  name: '', description: '', prices: { INR: { monthly: 0, yearly: 0 } }, trialDays: 14,
-  isActive: true, isPublic: true, sortOrder: 99,
-  limits: Object.fromEntries(LIMIT_KEYS.map((k) => [k, 0])),
-  features: Object.fromEntries(FEATURE_KEYS.map((k) => [k, false])),
+  name: '', description: '', prices: { INR: { trial: 0, '1month': 0, '3month': 0, '6month': 0, '12month': 0 } },
+  originalPrices: { INR: { trial: 0, '1month': 0, '3month': 0, '6month': 0, '12month': 0 } },
+  trialDays: 0, isActive: true, isPublic: true, sortOrder: 99, isTrial: false, popular: false,
+  limits: Object.fromEntries(LIMIT_KEYS.map((k) => [k, -1])),
+  features: Object.fromEntries(FEATURE_KEYS.map((k) => [k, true])),
 })
 
 function PlanEditor({ plan, onClose, onSaved }) {
   const [f, setF] = useState(() => ({
     ...emptyPlan(), ...plan,
-    prices: { INR: { monthly: plan?.prices?.INR?.monthly || 0, yearly: plan?.prices?.INR?.yearly || 0 } },
+    prices: { INR: { trial: plan?.prices?.INR?.trial || 0, '1month': plan?.prices?.INR?.['1month'] || plan?.prices?.INR?.monthly || 0, '3month': plan?.prices?.INR?.['3month'] || 0, '6month': plan?.prices?.INR?.['6month'] || 0, '12month': plan?.prices?.INR?.['12month'] || plan?.prices?.INR?.yearly || 0 } },
+    originalPrices: { INR: { trial: plan?.originalPrices?.INR?.trial || 0, '1month': plan?.originalPrices?.INR?.['1month'] || 0, '3month': plan?.originalPrices?.INR?.['3month'] || 0, '6month': plan?.originalPrices?.INR?.['6month'] || 0, '12month': plan?.originalPrices?.INR?.['12month'] || 0 } },
     limits: { ...emptyPlan().limits, ...(plan?.limits || {}) },
     features: { ...emptyPlan().features, ...(plan?.features || {}) },
+    isTrial: plan?.isTrial || false, popular: plan?.popular || false,
   }))
   const [busy, setBusy] = useState(false)
   const isNew = !plan?.id
@@ -157,14 +160,24 @@ function PlanEditor({ plan, onClose, onSaved }) {
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2 space-y-1.5"><Label>Name</Label><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
             <div className="col-span-2 space-y-1.5"><Label>Description</Label><Textarea rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></div>
-            <div className="space-y-1.5"><Label>Monthly price (₹)</Label><Input type="number" value={f.prices.INR.monthly} onChange={(e) => setF({ ...f, prices: { INR: { ...f.prices.INR, monthly: Number(e.target.value) } } })} /></div>
-            <div className="space-y-1.5"><Label>Yearly price (₹)</Label><Input type="number" value={f.prices.INR.yearly} onChange={(e) => setF({ ...f, prices: { INR: { ...f.prices.INR, yearly: Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label>Monthly price (₹)</Label><Input type="number" value={f.prices.INR['1month']} onChange={(e) => setF({ ...f, prices: { INR: { ...f.prices.INR, '1month': Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label>3-Month price (₹)</Label><Input type="number" value={f.prices.INR['3month']} onChange={(e) => setF({ ...f, prices: { INR: { ...f.prices.INR, '3month': Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label>6-Month price (₹)</Label><Input type="number" value={f.prices.INR['6month']} onChange={(e) => setF({ ...f, prices: { INR: { ...f.prices.INR, '6month': Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label>12-Month price (₹)</Label><Input type="number" value={f.prices.INR['12month']} onChange={(e) => setF({ ...f, prices: { INR: { ...f.prices.INR, '12month': Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label>Trial price (₹)</Label><Input type="number" value={f.prices.INR.trial} onChange={(e) => setF({ ...f, prices: { INR: { ...f.prices.INR, trial: Number(e.target.value) } } })} /></div>
+            <div className="col-span-2"><Separator /><p className="my-2 text-xs font-semibold text-slate-500">Original prices (shown as strikethrough)</p></div>
+            <div className="space-y-1.5"><Label className="text-xs">Orig. 1-Month (₹)</Label><Input type="number" value={f.originalPrices.INR['1month']} onChange={(e) => setF({ ...f, originalPrices: { INR: { ...f.originalPrices.INR, '1month': Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Orig. 3-Month (₹)</Label><Input type="number" value={f.originalPrices.INR['3month']} onChange={(e) => setF({ ...f, originalPrices: { INR: { ...f.originalPrices.INR, '3month': Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Orig. 6-Month (₹)</Label><Input type="number" value={f.originalPrices.INR['6month']} onChange={(e) => setF({ ...f, originalPrices: { INR: { ...f.originalPrices.INR, '6month': Number(e.target.value) } } })} /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Orig. 12-Month (₹)</Label><Input type="number" value={f.originalPrices.INR['12month']} onChange={(e) => setF({ ...f, originalPrices: { INR: { ...f.originalPrices.INR, '12month': Number(e.target.value) } } })} /></div>
             <div className="space-y-1.5"><Label>Trial days</Label><Input type="number" value={f.trialDays} onChange={(e) => setF({ ...f, trialDays: Number(e.target.value) })} /></div>
             <div className="space-y-1.5"><Label>Sort order</Label><Input type="number" value={f.sortOrder} onChange={(e) => setF({ ...f, sortOrder: Number(e.target.value) })} /></div>
           </div>
           <div className="flex gap-6">
             <label className="flex items-center gap-2 text-sm"><Switch checked={f.isActive} onCheckedChange={(v) => setF({ ...f, isActive: v })} /> Active</label>
             <label className="flex items-center gap-2 text-sm"><Switch checked={f.isPublic} onCheckedChange={(v) => setF({ ...f, isPublic: v })} /> Show on pricing</label>
+            <label className="flex items-center gap-2 text-sm"><Switch checked={f.isTrial} onCheckedChange={(v) => setF({ ...f, isTrial: v })} /> Trial plan</label>
+            <label className="flex items-center gap-2 text-sm"><Switch checked={f.popular} onCheckedChange={(v) => setF({ ...f, popular: v })} /> Popular</label>
           </div>
           <Separator />
           <div>

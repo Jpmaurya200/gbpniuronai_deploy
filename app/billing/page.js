@@ -58,7 +58,7 @@ export default function BillingPage() {
   const { data: plansRaw } = useSWR('/api/plans', fetcher)
   const { data: invoices, mutate: mutateInv } = useSWR('/api/billing/invoices', fetcher)
 
-  const [interval, setInterval] = useState('monthly')
+
   const [checkoutPlan, setCheckoutPlan] = useState(null)
   const [selectedInvoice, setSelectedInvoice] = useState(null)
   const [coupon, setCoupon] = useState('')
@@ -85,7 +85,7 @@ export default function BillingPage() {
   useEffect(() => {
     // reset coupon state whenever the checkout plan/interval changes
     setCoupon(''); setCouponResult(null)
-  }, [checkoutPlan, interval])
+  }, [checkoutPlan])
 
   const downloadInvoicePDF = (inv) => {
     try {
@@ -199,8 +199,9 @@ export default function BillingPage() {
 
   if (loading || !user) return <AuthGate />
 
-  const priceOf = (plan, itv) => plan?.prices?.INR?.[itv] || 0
-  const subtotal = checkoutPlan ? priceOf(checkoutPlan, interval) : 0
+  const priceOf = (plan) => plan?.prices?.INR?.[plan._interval || plan.slug] || 0
+  const subtotal = checkoutPlan ? priceOf(checkoutPlan) : 0
+  const activeInterval = checkoutPlan?._interval || checkoutPlan?.slug || '1month'
 
   const applyCoupon = async () => {
     if (!coupon.trim()) return
@@ -208,7 +209,7 @@ export default function BillingPage() {
     try {
       const res = await fetch('/api/billing/coupon/validate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: checkoutPlan.id, interval, couponCode: coupon.trim() }),
+        body: JSON.stringify({ planId: checkoutPlan.id, interval: activeInterval, couponCode: coupon.trim() }),
       })
       const data = await res.json()
       if (!data.valid) { setCouponResult(null); toast.error(data.reason || 'Invalid coupon'); return }
@@ -248,7 +249,7 @@ export default function BillingPage() {
       amount: order.amountPaise,
       currency: order.currency,
       name: 'niuronai',
-      description: `${order.name} plan (${interval})`,
+      description: `${order.name} plan (${activeInterval})`,
       order_id: order.razorpayOrderId,
       prefill: { email: user?.email || '', name: user?.name || '' },
       theme: { color: '#7c3aed' },
@@ -275,7 +276,7 @@ export default function BillingPage() {
     try {
       const co = await fetch('/api/billing/checkout', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: checkoutPlan.id, interval, couponCode: couponResult ? coupon.trim() : undefined }),
+        body: JSON.stringify({ planId: checkoutPlan.id, interval: activeInterval, couponCode: couponResult ? coupon.trim() : undefined }),
       })
       const order = await co.json()
       if (!co.ok) throw new Error(order.error || 'Checkout failed')
@@ -361,55 +362,55 @@ export default function BillingPage() {
 
           {/* Plans + invoices */}
           <div className="space-y-6 lg:col-span-2">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">Choose a plan</h2>
-              <div className="flex items-center rounded-lg border border-slate-200 bg-white p-1 text-sm">
-                <button onClick={() => setInterval('monthly')} className={`rounded-md px-3 py-1 font-medium ${interval === 'monthly' ? 'bg-violet-600 text-white' : 'text-slate-600'}`}>Monthly</button>
-                <button onClick={() => setInterval('yearly')} className={`rounded-md px-3 py-1 font-medium ${interval === 'yearly' ? 'bg-violet-600 text-white' : 'text-slate-600'}`}>Yearly <span className="text-emerald-500">-16%</span></button>
+            {/* Plans */}
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 mb-4">Choose a plan</h2>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {plans.filter(p => !p.isTrial).map((p) => {
+                  const interval = p.slug // slug IS the interval
+                  const price = p.prices?.INR?.[interval] || 0
+                  const originalPrice = p.originalPrices?.INR?.[interval]
+                  const isCurrent = p.id === currentPlanId
+                  const perMonth = interval === '3month' ? Math.round(price / 3) : interval === '6month' ? Math.round(price / 6) : interval === '12month' ? Math.round(price / 12) : price
+                  const savings = originalPrice ? Math.round((1 - price / originalPrice) * 100) : 0
+                  return (
+                    <Card key={p.id} className={`relative flex flex-col ${p.popular ? 'border-violet-300 ring-2 ring-violet-200 shadow-lg' : ''}`}>
+                      {p.popular && <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full bg-violet-600 px-3 py-0.5 text-[11px] font-semibold text-white whitespace-nowrap">⚡ Best value</span>}
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-base">{p.name}</CardTitle>
+                        <CardDescription className="min-h-[28px] text-xs">{p.description}</CardDescription>
+                        <div className="mt-1">
+                          {originalPrice && (
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="text-sm text-slate-400 line-through">{fmtINR(originalPrice)}</span>
+                              <Badge className="bg-emerald-100 text-emerald-700 text-[10px] border-0">{savings}% OFF</Badge>
+                            </div>
+                          )}
+                          <span className="text-2xl font-bold text-slate-900">{fmtINR(price)}</span>
+                          {perMonth !== price && <span className="ml-1 text-sm text-violet-600 font-medium">≈ {fmtINR(perMonth)}/mo</span>}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="flex flex-1 flex-col">
+                        <ul className="mb-4 space-y-1.5 text-xs text-slate-600">
+                          <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> Unlimited AI reviews & replies</li>
+                          <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> Unlimited SEO audits</li>
+                          <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> Rank tracking & analytics</li>
+                          <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> All features included</li>
+                        </ul>
+                        <div className="mt-auto">
+                          {isCurrent ? (
+                            <Button disabled variant="outline" className="w-full">Current plan</Button>
+                          ) : (
+                            <Button onClick={() => setCheckoutPlan({ ...p, _interval: interval })} className={`w-full ${p.popular ? 'bg-violet-600 hover:bg-violet-700' : ''}`} variant={p.popular ? 'default' : 'outline'}>
+                              Choose plan
+                            </Button>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )
+                })}
               </div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              {plans.map((p) => {
-                const price = priceOf(p, interval)
-                const isCurrent = p.id === currentPlanId
-                const featureList = Object.entries(p.features || {}).filter(([, v]) => v).map(([k]) => FEATURE_LABELS[k] || k)
-                return (
-                  <Card key={p.id} className={`relative flex flex-col ${p.popular ? 'border-violet-300 ring-1 ring-violet-200' : ''}`}>
-                    {p.popular && <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full bg-violet-600 px-2.5 py-0.5 text-[11px] font-semibold text-white">Most popular</span>}
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">{p.name}</CardTitle>
-                      <CardDescription className="min-h-[32px] text-xs">{p.description}</CardDescription>
-                      <div className="mt-1">
-                        <span className="text-2xl font-bold text-slate-900">{price === 0 ? 'Free' : fmtINR(price)}</span>
-                        {price > 0 && <span className="text-sm text-slate-400">/{interval === 'yearly' ? 'yr' : 'mo'}</span>}
-                      </div>
-                    </CardHeader>
-                    <CardContent className="flex flex-1 flex-col">
-                      <ul className="mb-4 space-y-1.5 text-xs text-slate-600">
-                        {Object.entries(p.limits || {}).slice(0, 4).map(([k, v]) => (
-                          <li key={k} className="flex items-center gap-1.5">
-                            {v === -1 ? <InfinityIcon className="h-3.5 w-3.5 text-violet-500" /> : <Check className="h-3.5 w-3.5 text-emerald-500" />}
-                            {limitText(v)} {LIMIT_LABELS[k] || k}
-                          </li>
-                        ))}
-                        {featureList.slice(0, 2).map((f) => (
-                          <li key={f} className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> {f}</li>
-                        ))}
-                      </ul>
-                      <div className="mt-auto">
-                        {isCurrent ? (
-                          <Button disabled variant="outline" className="w-full">Current plan</Button>
-                        ) : (
-                          <Button onClick={() => setCheckoutPlan(p)} className={`w-full ${p.popular ? 'bg-violet-600 hover:bg-violet-700' : ''}`} variant={p.popular ? 'default' : 'outline'}>
-                            {price === 0 ? 'Switch to Free' : 'Choose plan'}
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )
-              })}
             </div>
 
             <Card>
@@ -448,12 +449,12 @@ export default function BillingPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Checkout — {checkoutPlan?.name} plan</DialogTitle>
-            <DialogDescription>Billed {interval}. You can change or cancel anytime.</DialogDescription>
+            <DialogDescription>Billed {activeInterval}. You can change or cancel anytime.</DialogDescription>
           </DialogHeader>
           {checkoutPlan && (
             <div className="space-y-4">
               <div className="rounded-lg border border-slate-200 p-3 text-sm">
-                <div className="flex items-center justify-between"><span className="text-slate-500">{checkoutPlan.name} ({interval})</span><span className="font-medium">{fmtINR(subtotal)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-slate-500">{checkoutPlan.name} ({activeInterval})</span><span className="font-medium">{fmtINR(subtotal)}</span></div>
                 {totals && (
                   <>
                     <div className="mt-1.5 flex items-center justify-between text-emerald-600"><span>Discount</span><span>- {fmtINR(totals.discount)}</span></div>
