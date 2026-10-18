@@ -60,22 +60,22 @@ function slugify(str) {
 const LLM_MODEL = process.env.GEMINI_MODEL || process.env.OPENROUTER_MODEL || process.env.LLM_MODEL || 'gemini-1.5-flash'
 
 const FAST_OPENROUTER_MODELS = [
-  'google/gemini-2.0-flash-001',
-  'google/gemini-flash-1.5',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'meta-llama/llama-3.1-8b-instruct:free',
-  'mistralai/mistral-small-24b-instruct-2501:free',
+  'openrouter/auto',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'liquid/lfm-2.5-2.6b:free',
 ]
 
 async function callOpenRouter(apiKey, messages, temperature = 0.85) {
   const cleanKey = String(apiKey || '').trim().replace(/^["']|["']$/g, '')
   if (!cleanKey) throw new Error('OpenRouter API key is empty')
 
-  const initialModel = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001'
-  const modelsToTry = [initialModel]
-  for (const fm of FAST_OPENROUTER_MODELS) {
-    if (!modelsToTry.includes(fm)) modelsToTry.push(fm)
-    if (modelsToTry.length >= 2) break // Max 2 quick attempts to avoid long user waiting times
+  const initialModel = process.env.OPENROUTER_MODEL || 'openrouter/auto'
+  const candidateModels = [initialModel, ...FAST_OPENROUTER_MODELS]
+  const modelsToTry = []
+  for (const m of candidateModels) {
+    if (m && !modelsToTry.includes(m)) modelsToTry.push(m)
   }
 
   let lastErr = null
@@ -94,7 +94,7 @@ async function callOpenRouter(apiKey, messages, temperature = 0.85) {
           messages,
           temperature,
         }),
-        signal: AbortSignal.timeout(6000), // Max 6 seconds per attempt
+        signal: AbortSignal.timeout(8500), // Max 8.5 seconds per attempt
       })
 
       const data = await res.json().catch(() => ({}))
@@ -121,22 +121,45 @@ async function callOpenRouter(apiKey, messages, temperature = 0.85) {
 }
 
 async function callGemini(apiKey, messages, temperature = 0.85) {
-  const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
   const cleanKey = String(apiKey || '').trim().replace(/^["']|["']$/g, '')
-  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${cleanKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model, messages, temperature }),
-    signal: AbortSignal.timeout(7000), // 7 seconds timeout
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    throw new Error(data?.error?.message || `Google Gemini request failed (${res.status})`)
+  if (!cleanKey) throw new Error('Gemini API key is empty')
+
+  const modelsToTry = [
+    process.env.GEMINI_MODEL,
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-2.5-flash',
+  ].filter(Boolean)
+
+  let lastErr = null
+  for (const model of modelsToTry) {
+    try {
+      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cleanKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ model, messages, temperature }),
+        signal: AbortSignal.timeout(8500),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const errMsg = data?.error?.message || `Google Gemini request failed (${res.status})`
+        console.warn(`[Google Gemini: ${model}] HTTP ${res.status}: ${errMsg}`)
+        lastErr = new Error(errMsg)
+        continue
+      }
+      const content = data?.choices?.[0]?.message?.content || ''
+      if (content && typeof content === 'string' && content.trim()) {
+        return content
+      }
+    } catch (err) {
+      lastErr = err
+      console.warn(`[Google Gemini: ${model}] error:`, err.message)
+    }
   }
-  return data?.choices?.[0]?.message?.content || ''
+  throw lastErr || new Error('Google Gemini failed to respond.')
 }
 
 async function callEmergent(apiKey, messages, temperature = 0.85) {
@@ -161,15 +184,21 @@ async function callEmergent(apiKey, messages, temperature = 0.85) {
 async function callLLM(messages, temperature = 0.85) {
   const envEmergent = process.env.EMERGENT_LLM_KEY || ''
 
-  // 1. Auto-detect Gemini key (explicit GEMINI_API_KEY or prefixed with AIzaSy)
+  // 1. Auto-detect Gemini key (explicit GEMINI_API_KEY, GOOGLE_GEMINI_API_KEY, GOOGLE_API_KEY, or prefixed with AIzaSy)
   const geminiKey =
     process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_GEMINI_API_KEY ||
+    process.env.GEMINI_KEY ||
+    process.env.GOOGLE_API_KEY ||
     (envEmergent.startsWith('AIzaSy') ? envEmergent : null)
 
-  // 2. Auto-detect OpenRouter key (explicit OPENROUTER_API_KEY / OPENROUTER_KEY or prefixed with sk-or- or sk-)
+  // 2. Auto-detect OpenRouter key (explicit OPENROUTER_API_KEY / OPENROUTER_KEY / OPENROUTER, or prefixed with sk-or- or sk-)
   const openrouterKey =
     process.env.OPENROUTER_API_KEY ||
     process.env.OPENROUTER_KEY ||
+    process.env.OPEN_ROUTER_API_KEY ||
+    process.env.OPEN_ROUTER_KEY ||
+    process.env.OPENROUTER ||
     (envEmergent.startsWith('sk-or-') || envEmergent.startsWith('sk-') ? envEmergent : null)
 
   // 3. Emergent universal gateway key
@@ -893,312 +922,917 @@ async function runAudit(db, profile, campaignId, orgId) {
 
 
 // ---------------------------------------------------------------------------
-// Defaults
+// Dynamic Local SEO & Smart Buttons Synthesis Engine (35+ Business Niches)
 // ---------------------------------------------------------------------------
-function getCategoryTemplate(category = '', city = '', services = '') {
-  const c = String(category || '').toLowerCase()
+function shuffleSample(arr, count) {
+  const copy = [...arr]
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy.slice(0, count)
+}
+
+function synthesizeSmartSEO(params = {}) {
+  const biz = String(params.businessName || '').trim()
+  const cat = String(params.category || '').trim()
+  const city = String(params.city || '').trim()
+  const srv = Array.isArray(params.services) ? params.services.join(', ') : String(params.services || '').trim()
+  const desc = String(params.description || '').trim()
+
+  const c = `${biz} ${cat} ${srv} ${desc}`.toLowerCase()
   const loc = city ? ` in ${city}` : ''
+  const nearLoc = city ? ` near ${city}` : ' near me'
 
-  if (c.includes('dent') || c.includes('teeth') || c.includes('clinic') || c.includes('doctor') || c.includes('hospital') || c.includes('physio') || c.includes('health') || c.includes('medical')) {
-    return {
-      experienceButtons: [
-        'Painless Treatment',
-        'Gentle & Caring Doctor',
-        'Modern & Clean Clinic',
-        'Friendly Staff',
-        'Transparent Pricing',
-        'Quick Appointment',
-        'Highly Recommended',
+  // Extract user-entered services
+  const userServices = srv
+    ? srv.split(/[,;\n]+/).map((s) => s.trim()).filter((s) => s.length > 1)
+    : []
+  const capitalizedUserServices = userServices.map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+  const userKeywords = userServices.map((s) => `${s.toLowerCase()} specialist${loc}`)
+  const userButtons = userServices.slice(0, 3).map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+
+  // Extract localities/neighborhoods from city
+  const cityParts = city ? city.split(/[,/]+/).map((s) => s.trim()).filter(Boolean) : []
+  const primaryArea = cityParts[0] || 'Local Area'
+  const serviceAreas = []
+  if (city) serviceAreas.push(city)
+  if (cityParts.length > 1) serviceAreas.push(cityParts[1])
+  serviceAreas.push(`Central ${primaryArea}`, `Near ${primaryArea}`, `${primaryArea} Surroundings`)
+  const dedupedAreas = [...new Set(serviceAreas)].slice(0, 4)
+
+  let def = null
+
+  // 1. DENTAL
+  if (c.includes('dent') || c.includes('teeth') || c.includes('root canal') || c.includes('ortho') || c.includes('braces') || c.includes('implant')) {
+    def = {
+      suggestedCategory: 'Dental Clinic',
+      buttons: [
+        'Painless Treatment', 'Gentle & Caring Doctor', 'Clean & Modern Clinic', 'Friendly Staff',
+        'Transparent Pricing', 'Quick Appointment', 'Advanced Dental Equipment', 'Detailed Explanation',
+        'Comfortable Treatment', 'Highly Recommended', 'Minimal Waiting Time', 'Top Quality Care'
       ],
-      targetedKeywords: [
-        `best dental clinic${loc}`,
-        `top dentist${loc}`,
-        'painless root canal treatment',
-        'teeth cleaning and whitening',
-        'expert dental care',
-        'dental implants specialist',
+      keywords: [
+        `best dental clinic${loc}`, `top dentist${nearLoc}`, `painless root canal specialist${loc}`,
+        `teeth cleaning and whitening${loc}`, `expert dental implant clinic${loc}`, `affordable dentist${loc}`,
+        `emergency dental care${loc}`, `clear aligners braces${loc}`, `cosmetic dentist${loc}`
       ],
-      productsOffered: [
-        'Routine Dental Checkup',
-        'Teeth Cleaning & Whitening',
-        'Root Canal Treatment',
-        'Dental Implants',
-        'Clear Aligners / Braces',
+      products: [
+        'Routine Dental Checkup & X-Ray', 'Painless Root Canal Treatment', 'Teeth Cleaning & Polishing',
+        'Teeth Whitening', 'Dental Implants', 'Clear Aligners / Invisible Braces'
+      ]
+    }
+  }
+  // 2. SWEETS & MITHAI
+  else if (c.includes('sweet') || c.includes('mithai') || c.includes('namkeen') || c.includes('laddu') || c.includes('halwa') || c.includes('samosa') || c.includes('chaat') || c.includes('jalebi') || c.includes('kachori')) {
+    def = {
+      suggestedCategory: 'Sweets & Namkeen Shop',
+      buttons: [
+        'Fresh & Delicious Sweets', 'Pure Desi Ghee Taste', 'Crispy Hot Samosas', 'Clean & Hygienic Shop',
+        'Authentic Traditional Taste', 'Beautiful Gift Packaging', 'Quick & Polite Service', 'Fresh Daily Stock',
+        'Great Variety of Mithai', 'Affordable & High Quality', 'Mouthwatering Taste', 'Top Quality Namkeen'
       ],
-      serviceAreas: city ? [city, `Central ${city}`, `Local Neighborhood`] : ['Local Area', 'City Center'],
+      keywords: [
+        `best sweets shop${loc}`, `fresh desi ghee mithai${loc}`, `top traditional sweets${loc}`,
+        `best samosa and snacks${loc}`, `famous mithai shop${nearLoc}`, `festival gift sweet boxes${loc}`,
+        `authentic indian sweets${loc}`, `fresh kaju katli and laddu${loc}`
+      ],
+      products: [
+        'Fresh Kaju Katli & Barfi', 'Desi Ghee Motichoor Laddu', 'Hot Samosa & Kachori',
+        'Traditional Gulab Jamun & Rasgulla', 'Festive Sweet Gift Boxes', 'Special Namkeen & Chaat'
+      ]
+    }
+  }
+  // 3. CAFE & BAKERY
+  else if (c.includes('cafe') || c.includes('coffee') || c.includes('bakery') || c.includes('bistro') || c.includes('pastry') || c.includes('cake') || c.includes('brew')) {
+    def = {
+      suggestedCategory: 'Cafe & Bakery',
+      buttons: [
+        'Delicious Coffee', 'Cozy & Aesthetic Ambience', 'Fresh Baked Pastries', 'Polite & Quick Service',
+        'Great Wi-Fi & Work Vibe', 'Fresh Quality Ingredients', 'Relaxing Music', 'Artisanal Brews',
+        'Pocket Friendly', 'Must Visit Spot', 'Warm Hospitality', 'Top Quality Desserts'
+      ],
+      keywords: [
+        `best cafe${loc}`, `top coffee shop${nearLoc}`, `specialty coffee roasters${loc}`,
+        `best artisanal bakery${loc}`, `cozy brunch cafe${loc}`, `freshly baked cakes and pastries${loc}`,
+        `work friendly cafe${loc}`, `best cold brew and snacks${loc}`
+      ],
+      products: [
+        'Artisanal Pour-Over & Cold Brew', 'Espresso & Cappuccino', 'Freshly Baked Pastries & Croissants',
+        'Handcrafted Custom Cakes', 'Gourmet Sandwiches & Brunch', 'Healthy Smoothies & Shakes'
+      ]
+    }
+  }
+  // 4. RESTAURANT & DINING
+  else if (c.includes('rest') || c.includes('dining') || c.includes('dhaba') || c.includes('kitchen') || c.includes('thali') || c.includes('biryani')) {
+    def = {
+      suggestedCategory: 'Restaurant',
+      buttons: [
+        'Delicious Food', 'Great Family Ambience', 'Courteous & Fast Service', 'Authentic Taste & Flavors',
+        'Clean & Hygienic Dining', 'Generous Portion Sizes', 'Reasonable Pricing', 'Fresh Ingredients',
+        'Top-Notch Hospitality', 'Highly Recommended', 'Lovely Table Decor', 'Quick Food Serving'
+      ],
+      keywords: [
+        `best restaurant${loc}`, `top dining place${nearLoc}`, `authentic cuisine restaurant${loc}`,
+        `family restaurant${loc}`, `best lunch and dinner spot${loc}`, `delicious food places${nearLoc}`,
+        `popular thali and biryani${loc}`, `top rated multi cuisine food${loc}`
+      ],
+      products: [
+        'Signature Chef Specials', 'Family Dining & Thali Packages', 'Fresh Tandoori & Starters',
+        'Authentic Main Course Curries', 'Delicious Biryani & Rice Bowls', 'Desserts & Beverages'
+      ]
+    }
+  }
+  // 5. FAST FOOD & SNACKS
+  else if (c.includes('pizza') || c.includes('burger') || c.includes('fast food') || c.includes('shawarma') || c.includes('wrap') || c.includes('roll') || c.includes('snack')) {
+    def = {
+      suggestedCategory: 'Fast Food Joint',
+      buttons: [
+        'Crispy & Delicious', 'Super Fast Service', 'Cheesy & Flavorful', 'Generous Fillings',
+        'Piping Hot Food', 'Great Value Combos', 'Clean Preparation', 'Loved the Taste',
+        'Quick Takeaway', 'Fresh Buns & Crust'
+      ],
+      keywords: [
+        `best fast food${loc}`, `best pizza place${loc}`, `crispy burgers and wraps${loc}`,
+        `top snacks joint${nearLoc}`, `quick bite food corner${loc}`, `fast delivery food${loc}`
+      ],
+      products: [
+        'Wood-Fired & Cheesy Pizzas', 'Crispy Gourmet Burgers', 'Hot Kathi Rolls & Wraps',
+        'Loaded Fries & Shakes', 'Quick Combos & Meal Deals'
+      ]
+    }
+  }
+  // 6. PHARMACY & MEDICAL STORE
+  else if (c.includes('pharm') || c.includes('chemist') || c.includes('medical store') || c.includes('drug') || c.includes('dispensary')) {
+    def = {
+      suggestedCategory: 'Pharmacy & Medical Store',
+      buttons: [
+        'All Medicines Available', 'Genuine & Authentic Stock', 'Prompt & Polite Chemist', 'Free Home Delivery',
+        'Fair Discount on Medicines', 'Clean & Organized Store', 'Emergency Support', 'Helpful Dosage Advice'
+      ],
+      keywords: [
+        `best pharmacy${loc}`, `chemist and druggist${nearLoc}`, `24 hours medical store${loc}`,
+        `genuine medicines shop${loc}`, `prescription medicine delivery${loc}`, `healthcare and wellness store${loc}`
+      ],
+      products: [
+        'Prescription Medicines & Antibiotics', 'Daily Healthcare & Wellness Supplements',
+        'Baby Care & Mother Products', 'First Aid & Surgical Supplies', 'BP Monitor & Glucometer Devices'
+      ]
+    }
+  }
+  // 7. DIAGNOSTIC LAB & PATHOLOGY
+  else if (c.includes('patho') || c.includes('diagnostic') || c.includes('lab') || c.includes('blood test') || c.includes('x-ray') || c.includes('scan')) {
+    def = {
+      suggestedCategory: 'Diagnostic Lab & Pathology',
+      buttons: [
+        'Painless Blood Collection', 'Accurate & Timely Reports', 'Punctual Home Sample Collection',
+        'Clean & Sterile Equipment', 'Courteous Phlebotomist', 'Affordable Health Packages', 'Clear Online Reports'
+      ],
+      keywords: [
+        `best pathology lab${loc}`, `blood test center${nearLoc}`, `full body checkup packages${loc}`,
+        `diagnostic center${loc}`, `home sample collection blood test${loc}`, `accurate medical test lab${loc}`
+      ],
+      products: [
+        'Full Body Health Checkup Package', 'Complete Blood Count (CBC) & Sugar Profile',
+        'Thyroid, Lipid & Liver Function Tests', 'Vitamin D & B12 Screening', 'Home Blood Sample Collection'
+      ]
+    }
+  }
+  // 8. PHYSIOTHERAPY & REHAB
+  else if (c.includes('physio') || c.includes('rehab') || c.includes('chiropract') || c.includes('spine')) {
+    def = {
+      suggestedCategory: 'Physiotherapy Clinic',
+      buttons: [
+        'Effective Pain Relief', 'Experienced Physiotherapist', 'Modern Therapy Equipment',
+        'Personalized Exercise Plan', 'Gentle & Patient Care', 'Visible Posture Improvement', 'Comfortable Clinic'
+      ],
+      keywords: [
+        `best physiotherapist${loc}`, `physiotherapy clinic${nearLoc}`, `back and neck pain treatment${loc}`,
+        `sports injury rehabilitation${loc}`, `paralysis and stroke rehab${loc}`, `post surgery physical therapy${loc}`
+      ],
+      products: [
+        'Back & Neck Pain Electrotherapy', 'Sports Injury & Ligament Rehabilitation',
+        'Joint Mobilization & Posture Correction', 'Post-Surgical Recovery Sessions', 'Home Visit Physiotherapy'
+      ]
+    }
+  }
+  // 9. EYE CLINIC & OPTICIAN
+  else if (c.includes('eye') || c.includes('optic') || c.includes('lens') || c.includes('vision') || c.includes('spectacle') || c.includes('specs')) {
+    def = {
+      suggestedCategory: 'Eye Care & Optician',
+      buttons: [
+        'Precise Eye Testing', 'Stylish Frame Collection', 'Comfortable Prescription Glasses',
+        'Prompt Delivery', 'Clear Lens Vision', 'Helpful Consultation', 'Reasonable Pricing'
+      ],
+      keywords: [
+        `best optician${loc}`, `eye testing clinic${nearLoc}`, `designer spectacles and frames${loc}`,
+        `prescription contact lenses${loc}`, `blue light computer glasses${loc}`, `progressive lens specialist${loc}`
+      ],
+      products: [
+        'Computerized Eye Sight Testing', 'Designer Eyeglass Frames & Sunglasses',
+        'Anti-Glare & Blue Cut Lenses', 'Daily & Monthly Contact Lenses', 'Progressive & Bifocal Spectacles'
+      ]
+    }
+  }
+  // 10. DOCTOR & MEDICAL CLINIC
+  else if (c.includes('clinic') || c.includes('doctor') || c.includes('hospital') || c.includes('physician') || c.includes('pediatr') || c.includes('gynec') || c.includes('dermat') || c.includes('ent') || c.includes('health')) {
+    def = {
+      suggestedCategory: 'Medical Clinic',
+      buttons: [
+        'Accurate Diagnosis', 'Compassionate & Caring Doctor', 'Quick Consultation', 'Clean & Hygienic Clinic',
+        'Clear Explanation of Treatment', 'Friendly Staff', 'Effective Medication', 'Highly Recommended'
+      ],
+      keywords: [
+        `best clinic${loc}`, `top doctor${nearLoc}`, `general physician consultation${loc}`,
+        `specialist medical clinic${loc}`, `family health clinic${loc}`, `trusted doctor consultation${loc}`
+      ],
+      products: [
+        'General Health Consultation', 'Chronic Disease Management (BP/Diabetes)',
+        'Fever & Viral Infection Care', 'Preventive Health Assessment', 'Vaccination & Immunization'
+      ]
+    }
+  }
+  // 11. MAKEUP ARTIST & BRIDAL STUDIO
+  else if (c.includes('makeup') || c.includes('bridal studio') || c.includes('makeover') || c.includes('mehendi')) {
+    def = {
+      suggestedCategory: 'Bridal Makeup Studio',
+      buttons: [
+        'Flawless HD Makeup', 'Punctual & Highly Skilled Artist', 'Long Lasting Makeup',
+        'Natural & Elegant Look', 'Great Hair Styling & Draping', 'Patient & Receptive',
+        'Comfortable Studio', 'Compliments All Around'
+      ],
+      keywords: [
+        `best bridal makeup artist${loc}`, `top makeover studio${nearLoc}`, `hd and airbrush bridal makeup${loc}`,
+        `engagement makeup specialist${loc}`, `party makeup and hair styling${loc}`, `affordable bridal makeover packages${loc}`
+      ],
+      products: [
+        'HD & Airbrush Bridal Makeup', 'Reception & Engagement Makeover', 'Party & Festive Makeup',
+        'Saree & Dupatta Draping', 'Bridal Hairstyling & Extensions', 'Pre-Bridal Grooming'
+      ]
+    }
+  }
+  // 12. HAIR SALON & BARBER
+  else if (c.includes('salon') || c.includes('barber') || c.includes('hair') || c.includes('shave') || c.includes('beard')) {
+    def = {
+      suggestedCategory: 'Hair Salon & Barber',
+      buttons: [
+        'Skilled Stylist', 'Perfect Haircut', 'Relaxing Head Massage', 'Neat & Clean Salon',
+        'Great Consultation', 'Patient Grooming', 'Courteous Staff', 'Fair Pricing', 'Modern Equipment'
+      ],
+      keywords: [
+        `best hair salon${loc}`, `top men salon and barber${nearLoc}`, `professional hair styling${loc}`,
+        `hair spa and keratin treatment${loc}`, `beard grooming specialist${loc}`, `affordable hair salon${loc}`
+      ],
+      products: [
+        'Trendy Haircuts & Styling', 'Beard Trim & Royal Shave', 'Keratin & Botox Hair Treatment',
+        'Deep Nourishing Hair Spa', 'Hair Coloring & Highlights', 'Scalp Care & Massage'
+      ]
+    }
+  }
+  // 13. BEAUTY PARLOR & SPA
+  else if (c.includes('beauty') || c.includes('parlour') || c.includes('parlor') || c.includes('spa') || c.includes('facial') || c.includes('skin') || c.includes('waxing')) {
+    def = {
+      suggestedCategory: 'Beauty Parlor & Spa',
+      buttons: [
+        'Glowing Skin Results', 'Gentle & Expert Beautician', 'Relaxing & Hygienic Ambience',
+        'Premium Products Used', 'Painless Waxing', 'Personalized Consultation', 'Affordable Packages'
+      ],
+      keywords: [
+        `best beauty parlor${loc}`, `top ladies salon${nearLoc}`, `hydrating facial and cleanup${loc}`,
+        `relaxing full body massage spa${loc}`, `bridal skincare packages${loc}`, `waxing and threading salon${loc}`
+      ],
+      products: [
+        'Hydra Facial & Skin Whitening', 'Full Body Relaxing Spa Massage', 'Waxing, Threading & Bleach',
+        'Deluxe Manicure & Pedicure', 'Pre-Bridal Skincare Packages', 'Under-Eye & Pigmentation Treatment'
+      ]
+    }
+  }
+  // 14. CAR WASH & DETAILING
+  else if (c.includes('wash') || c.includes('detail') || c.includes('ceramic') || c.includes('teflon') || c.includes('ppf')) {
+    def = {
+      suggestedCategory: 'Car Detailing & Wash',
+      buttons: [
+        'Showroom Shine Finish', 'Deep Interior Dry Cleaning', 'Meticulous Attention to Detail',
+        'High Pressure Foam Wash', 'Super Fast Service', 'Genuine Ceramic Coating', 'Honest Pricing'
+      ],
+      keywords: [
+        `best car wash${loc}`, `top car detailing studio${nearLoc}`, `ceramic coating specialist${loc}`,
+        `paint protection film ppf${loc}`, `car interior dry clean${loc}`, `waterless foam car wash${loc}`
+      ],
+      products: [
+        'High Pressure Foam Wash & Vacuum', 'Complete Interior Steam Cleaning',
+        '9H Ceramic Coating with Warranty', 'Paint Protection Film (PPF)', 'Headlight & Glass Polish'
+      ]
+    }
+  }
+  // 15. AUTO REPAIR & GARAGE
+  else if (c.includes('car') || c.includes('auto') || c.includes('garage') || c.includes('mechanic') || c.includes('motor')) {
+    def = {
+      suggestedCategory: 'Auto Repair & Garage',
+      buttons: [
+        'Honest Diagnostics', 'Quick Turnaround Time', 'Genuine Spare Parts', 'Transparent Quotation',
+        'Skilled & Experienced Mechanics', 'Smooth Driving After Service', 'Fair Labor Charges', 'Highly Trustworthy'
+      ],
+      keywords: [
+        `best car service center${loc}`, `trusted auto garage${nearLoc}`, `car engine and brake repair${loc}`,
+        `car ac repair and service${loc}`, `periodic car maintenance${loc}`, `emergency car breakdown repair${loc}`
+      ],
+      products: [
+        'Periodic General Car Servicing', 'Computerized Engine Diagnostics', 'Brake Pad & Suspension Overhaul',
+        'Car AC Servicing & Gas Refill', 'Clutch & Gearbox Repair', 'Battery Replacement & Electrical Check'
+      ]
+    }
+  }
+  // 16. BIKE & TWO WHEELER
+  else if (c.includes('bike') || c.includes('motorcycle') || c.includes('scooter') || c.includes('two wheeler')) {
+    def = {
+      suggestedCategory: 'Bike & Two Wheeler Service',
+      buttons: [
+        'Smooth Pickup & Mileage', 'Quick Service', 'Genuine Oil & Spares', 'Reasonable Charges',
+        'Knowledgeable Mechanic', 'Detailed Inspection', 'Friendly Response'
+      ],
+      keywords: [
+        `best bike repair${loc}`, `two wheeler servicing center${nearLoc}`, `motorcycle mechanic${loc}`,
+        `scooter service and tuning${loc}`, `engine oil change bike${loc}`
+      ],
+      products: [
+        'Comprehensive Bike Servicing', 'Engine Oil Change & Tuning', 'Brake & Chain Sprocket Service',
+        'Carburettor & Fuel Injector Cleaning', 'Battery & Electrical Inspection'
+      ]
+    }
+  }
+  // 17. TYRE SHOP & WHEEL ALIGNMENT
+  else if (c.includes('tyre') || c.includes('tire') || c.includes('wheel') || c.includes('alignment') || c.includes('puncture')) {
+    def = {
+      suggestedCategory: 'Tyre Shop & Wheel Alignment',
+      buttons: [
+        'Precise 3D Alignment', 'Fast Puncture Repair', 'Genuine Brand Tyres', 'Affordable Pricing',
+        'Nitrogen Air Facility', 'Expert Recommendation', 'Quick Installation'
+      ],
+      keywords: [
+        `best tyre shop${loc}`, `3d wheel alignment${nearLoc}`, `car wheel balancing${loc}`,
+        `branded tubeless tyres${loc}`, `emergency puncture repair${loc}`
+      ],
+      products: [
+        'New Branded Tyres (All Sizes)', 'Computerized 3D Wheel Alignment', 'Dynamic Wheel Balancing',
+        'Nitrogen Air Inflation', 'Tubeless Puncture Repair'
+      ]
+    }
+  }
+  // 18. GYM & FITNESS
+  else if (c.includes('gym') || c.includes('fitness') || c.includes('workout') || c.includes('crossfit') || c.includes('bodybuilding')) {
+    def = {
+      suggestedCategory: 'Gym & Fitness Center',
+      buttons: [
+        'Modern & Maintained Equipment', 'Knowledgeable & Certified Trainers', 'Clean & Spacious Floor',
+        'High Energy Atmosphere', 'Personalized Diet & Workout Plan', 'Visible Transformation Results',
+        'Affordable Memberships', 'Friendly Community'
+      ],
+      keywords: [
+        `best gym${loc}`, `top fitness center${nearLoc}`, `personal training gym${loc}`,
+        `weight loss and muscle building gym${loc}`, `unisex gym with modern equipment${loc}`, `affordable gym membership${loc}`
+      ],
+      products: [
+        'Monthly & Annual Gym Membership', '1-on-1 Certified Personal Training',
+        'Weight Loss & Fat Reduction Program', 'Muscle Building & Hypertrophy Regimen', 'Strength & Conditioning Training'
+      ]
+    }
+  }
+  // 19. YOGA & MEDITATION
+  else if (c.includes('yoga') || c.includes('pilates') || c.includes('meditation')) {
+    def = {
+      suggestedCategory: 'Yoga & Meditation Studio',
+      buttons: [
+        'Peaceful & Zen Environment', 'Experienced & Patient Guru', 'Improved Flexibility & Posture',
+        'Stress Relieving Sessions', 'Small Personal Batches', 'Gentle Guidance', 'Energizing Morning Classes'
+      ],
+      keywords: [
+        `best yoga classes${loc}`, `top meditation and yoga studio${nearLoc}`, `power yoga and pilates${loc}`,
+        `pranayama and breathwork classes${loc}`, `yoga for weight loss and back pain${loc}`
+      ],
+      products: [
+        'Daily Morning & Evening Yoga Batches', 'Power Yoga for Weight Loss',
+        'Restorative Pranayama & Meditation', 'Pilates Core Strengthening', 'Private 1-on-1 Yoga Classes'
+      ]
+    }
+  }
+  // 20. PLUMBING
+  else if (c.includes('plumb') || c.includes('leak') || c.includes('pipe') || c.includes('sanitary') || c.includes('drain')) {
+    def = {
+      suggestedCategory: 'Plumbing Services',
+      buttons: [
+        'Quick Response to Call', 'Punctual & Skilled Plumber', 'Clean Work No Mess', 'Transparent Hourly Rates',
+        'Permanent Leakage Fix', 'Quality Fittings Used', 'Reliable Emergency Service'
+      ],
+      keywords: [
+        `best plumber${loc}`, `emergency plumber${nearLoc}`, `water pipe leakage repair${loc}`,
+        `bathroom sanitary fitting${loc}`, `blocked drain and pipe clearing${loc}`, `water tank cleaning service${loc}`
+      ],
+      products: [
+        'Pipe Leakage & Seepage Repair', 'Bathroom Fitting & Tap Replacement',
+        'Drain Blockage & Choke Removal', 'Water Tank Cleaning & Motor Fitting', 'Full Bathroom Sanitary Plumbing'
+      ]
+    }
+  }
+  // 21. ELECTRICAL
+  else if (c.includes('electr') || c.includes('wiring') || c.includes('mcb') || c.includes('electrician')) {
+    def = {
+      suggestedCategory: 'Electrical Services',
+      buttons: [
+        'On-Time Arrival', 'Safe & Clean Wiring Work', 'Accurate Troubleshooting', 'Reasonable Service Charge',
+        'Skilled & Certified Electrician', 'Polite Behavior', 'Quick Fault Resolution'
+      ],
+      keywords: [
+        `best electrician${loc}`, `emergency electrician${nearLoc}`, `short circuit and wiring repair${loc}`,
+        `mcb switchboard installation${loc}`, `ceiling fan and light fitting${loc}`, `home electrical contractor${loc}`
+      ],
+      products: [
+        'Short Circuit & Trip Troubleshooting', 'Full House Electrical Concealed Wiring',
+        'Switchboard & MCB Replacement', 'Ceiling Fan & Decorative Light Fitting', 'Inverter & Battery Wiring Setup'
+      ]
+    }
+  }
+  // 22. AC REPAIR & SERVICE
+  else if (c.includes('ac ') || c.includes('air cond') || c.includes('hvac') || c.includes('cooling') || c.includes('refrigerat')) {
+    def = {
+      suggestedCategory: 'AC Repair & Service',
+      buttons: [
+        'Ice Cold Cooling Restored', 'Fast Same-Day Service', 'Transparent Gas Refill Charges',
+        'Deep Jet Pump Cleaning', 'Expert Technicians', 'No Hidden Fees', 'Polite & Professional'
+      ],
+      keywords: [
+        `best ac service${loc}`, `ac repair and maintenance${nearLoc}`, `split ac gas refill${loc}`,
+        `jet pump ac cleaning${loc}`, `ac installation and uninstallation${loc}`, `inverter ac pcb repair${loc}`
+      ],
+      products: [
+        'Jet Pump Foam AC Servicing', 'AC Gas Refill (R32 / R410 / R22)',
+        'AC Installation & Shifting Service', 'Cooling Coil & Compressor Repair', 'Inverter PCB Board Diagnostics'
+      ]
+    }
+  }
+  // 23. PAINTING & WATERPROOFING
+  else if (c.includes('paint') || c.includes('whitewash') || c.includes('waterproof') || c.includes('texture')) {
+    def = {
+      suggestedCategory: 'Home Painting & Waterproofing',
+      buttons: [
+        'Flawless Wall Finish', 'Dust-Free Clean Painting', 'On-Time Project Completion',
+        'Detailed Color Consultation', 'Quality Branded Paints Used', 'Effective Waterproofing', 'Courteous Painters'
+      ],
+      keywords: [
+        `best house painter${loc}`, `interior and exterior painting${nearLoc}`, `wall texture and stencil painting${loc}`,
+        `roof and wall waterproofing${loc}`, `affordable home whitewash${loc}`, `professional painting contractors${loc}`
+      ],
+      products: [
+        'Interior Luxury Emulsion Painting', 'Exterior Weatherproof Shield Coating',
+        'Wall & Roof Waterproofing Solutions', 'Designer Wall Texture & Stencils', 'Putty, Primer & Sanding Base Work'
+      ]
+    }
+  }
+  // 24. CARPENTRY & MODULAR KITCHEN
+  else if (c.includes('carpent') || c.includes('modular kitchen') || c.includes('furniture repair') || c.includes('woodwork')) {
+    def = {
+      suggestedCategory: 'Carpentry & Modular Kitchen',
+      buttons: [
+        'Precise Craftsmanship', 'Sturdy & Durable Woodwork', 'Smooth Drawer & Hinges Movement',
+        'Fair Quotation', 'Punctual Carpenter', 'Customized as per Requirements', 'Clean Worksite'
+      ],
+      keywords: [
+        `best carpenter${loc}`, `modular kitchen maker${nearLoc}`, `custom wardrobe woodwork${loc}`,
+        `door lock and hinge repair${loc}`, `furniture repair and assembly${loc}`, `wooden interior work${loc}`
+      ],
+      products: [
+        'Modular Kitchen Design & Installation', 'Custom Sliding Wardrobes & Cabinets',
+        'Door Lock, Handle & Hinge Fixing', 'Bed, Sofa & Table Custom Carpentry', 'Hydraulic Fitting & Soft-Close Drawers'
+      ]
+    }
+  }
+  // 25. PEST CONTROL
+  else if (c.includes('pest') || c.includes('termite') || c.includes('cockroach') || c.includes('bed bug')) {
+    def = {
+      suggestedCategory: 'Pest Control Services',
+      buttons: [
+        '100% Pest Free Guarantee', 'Odorless & Safe Chemicals', 'Punctual & Thorough Treatment',
+        'Long Lasting Protection', 'Transparent Pricing', 'Kid & Pet Friendly Gels', 'Certified Technicians'
+      ],
+      keywords: [
+        `best pest control${loc}`, `termite treatment specialist${nearLoc}`, `cockroach herbal gel pest control${loc}`,
+        `bed bug eradication service${loc}`, `anti termite piping for construction${loc}`, `residential pest control${loc}`
+      ],
+      products: [
+        'Herbal Cockroach Gel Treatment', 'Pre & Post Construction Anti-Termite Treatment',
+        'Bed Bug Heat & Spray Treatment', 'Rodent & Rat Proofing Solutions', 'Mosquito & Fly Fogging Service'
+      ]
+    }
+  }
+  // 26. CLEANING SERVICES
+  else if (c.includes('clean') || c.includes('deep clean') || c.includes('housekeep') || c.includes('maid')) {
+    def = {
+      suggestedCategory: 'Cleaning Services',
+      buttons: [
+        'Sparkling Clean Home', 'Punctual & Dedicated Cleaners', 'Heavy Duty Machinery Used',
+        'Deep Stains Removed', 'Courteous & Verified Staff', 'Hygienic Bathroom Sanitization', 'Great Value for Money'
+      ],
+      keywords: [
+        `best deep home cleaning${loc}`, `full house cleaning service${nearLoc}`, `bathroom and kitchen deep clean${loc}`,
+        `sofa and carpet shampoo cleaning${loc}`, `office cleaning services${loc}`, `move in deep cleaning${loc}`
+      ],
+      products: [
+        'Full Home Deep Cleaning Service', 'Intense Kitchen & Chimney Degreasing',
+        'Bathroom Descaling & Sanitization', 'Sofa, Mattress & Carpet Shampooing', 'Balcony & Floor Scrubbing Machine Work'
+      ]
+    }
+  }
+  // 27. REAL ESTATE & PROPERTY
+  else if (c.includes('real estate') || c.includes('property') || c.includes('flat') || c.includes('realtor') || c.includes('plot') || c.includes('broker')) {
+    def = {
+      suggestedCategory: 'Real Estate & Property Consultant',
+      buttons: [
+        'Transparent & Honest Deals', 'Extensive Property Options', 'Smooth Paperwork & Registration',
+        'Great Market Knowledge', 'Zero Hidden Commissions', 'Helpful & Patient Agent', 'Best Investment Advice'
+      ],
+      keywords: [
+        `best real estate agent${loc}`, `property dealer${nearLoc}`, `buy 2bhk 3bhk flats${loc}`,
+        `commercial office space on lease${loc}`, `residential plots for sale${loc}`, `trusted property consultant${loc}`
+      ],
+      products: [
+        'Residential Apartments (1/2/3 BHK)', 'Luxury Independent Villas & Plots',
+        'Commercial Shops & Office Leasing', 'Property Legal Verification & Title Search', 'Home Loan Assistance & Paperwork'
+      ]
+    }
+  }
+  // 28. INTERIOR DESIGN & ARCHITECTURE
+  else if (c.includes('interior') || c.includes('decor') || c.includes('architect')) {
+    def = {
+      suggestedCategory: 'Interior Designer & Architecture',
+      buttons: [
+        'Breathtaking Designs', 'High Quality Materials Used', 'Timely Project Handover',
+        'Realistic 3D Visualization', 'Smart Space Utilization', 'Transparent Budget Estimates', 'End-to-End Execution'
+      ],
+      keywords: [
+        `best interior designer${loc}`, `turnkey interior contractor${nearLoc}`, `modular kitchen interior${loc}`,
+        `luxury home decor${loc}`, `commercial office interior design${loc}`, `3d architectural plan and layout${loc}`
+      ],
+      products: [
+        'Full Home Turnkey Interior Design', 'Modular Kitchen & Smart Wardrobes',
+        'False Ceiling & Architectural Lighting', 'Custom Wall Paneling & Paint Concepts', 'Living Room & Bedroom 3D Layout Planning'
+      ]
+    }
+  }
+  // 29. LEGAL & ADVOCATES
+  else if (c.includes('law') || c.includes('legal') || c.includes('advocate') || c.includes('court') || c.includes('attorney')) {
+    def = {
+      suggestedCategory: 'Legal & Advocates',
+      buttons: [
+        'Clear & Honest Legal Advice', 'Deep Legal Knowledge', 'Strong Court Representation',
+        'Prompt Case Updates', 'Fair & Transparent Fees', 'Confidential & Professional', 'Positive Case Outcome'
+      ],
+      keywords: [
+        `best advocate${loc}`, `top lawyer${nearLoc}`, `property dispute legal consultation${loc}`,
+        `civil and criminal advocate${loc}`, `legal agreement drafting and registration${loc}`, `corporate and business legal advisory${loc}`
+      ],
+      products: [
+        'Comprehensive Legal Consultation', 'Property Title & Sale Deed Verification',
+        'Contract, NDA & Agreement Drafting', 'Civil & Family Litigation Representation', 'Corporate & Commercial Advisory'
+      ]
+    }
+  }
+  // 30. CHARTERED ACCOUNTANT (CA) & TAX
+  else if (c.includes('ca ') || c.includes('chartered') || c.includes('tax') || c.includes('gst') || c.includes('itr') || c.includes('audit')) {
+    def = {
+      suggestedCategory: 'Chartered Accountant & Tax Advisory',
+      buttons: [
+        'Hassle-Free ITR Filing', 'Accurate GST Guidance', 'Timely Tax Compliance',
+        'Maximized Legal Tax Savings', 'Knowledgeable & Courteous CA', 'Prompt Support on Queries', 'Very Reasonable Charges'
+      ],
+      keywords: [
+        `best chartered accountant${loc}`, `top ca firm${nearLoc}`, `income tax itr filing specialist${loc}`,
+        `gst registration and return filing${loc}`, `company registration and roc compliance${loc}`, `bookkeeping and statutory audit${loc}`
+      ],
+      products: [
+        'Individual & Business ITR Filing', 'Monthly GST Returns & Audit Compliance',
+        'Private Limited & LLP Company Incorporation', 'Statutory & Internal Financial Audits', 'TDS & Payroll Management Services'
+      ]
+    }
+  }
+  // 31. COACHING & EDUCATION
+  else if (c.includes('coach') || c.includes('tuition') || c.includes('classes') || c.includes('institute') || c.includes('academy')) {
+    def = {
+      suggestedCategory: 'Coaching & Education Institute',
+      buttons: [
+        'Crystal Clear Concept Clarity', 'Caring & Dedicated Faculty', 'Extensive Study Material',
+        'Regular Doubt Clearing Sessions', 'Noticeable Score Improvement', 'Disciplined & Motivating Environment', 'Individual Attention'
+      ],
+      keywords: [
+        `best coaching institute${loc}`, `top tuition classes${nearLoc}`, `board exam coaching${loc}`,
+        `iit jee and neet foundation classes${loc}`, `competitive exam preparation${loc}`, `maths and science coaching${loc}`
+      ],
+      products: [
+        'CBSE & ICSE Board Coaching (Class 8-12)', 'IIT-JEE & NEET Comprehensive Batches',
+        'Weekly Concept & Doubt Clearing Clinics', 'Curated Topic-Wise Study Material & Tests', 'Individual Mentorship & Performance Tracking'
+      ]
+    }
+  }
+  // 32. PRESCHOOL & DAYCARE
+  else if (c.includes('school') || c.includes('preschool') || c.includes('playschool') || c.includes('daycare')) {
+    def = {
+      suggestedCategory: 'Preschool & Daycare',
+      buttons: [
+        'Loving & Trained Teachers', 'Safe CCTV Monitored Campus', 'Activity-Based Play Learning',
+        'Clean & Hygienic Environment', 'Great Child Development', 'Regular Parent Updates', 'Fun & Engaging Atmosphere'
+      ],
+      keywords: [
+        `best preschool${loc}`, `top playschool and daycare${nearLoc}`, `activity based kindergarten${loc}`,
+        `safe daycare center${loc}`, `early childhood education${loc}`, `nursery school admissions${loc}`
+      ],
+      products: [
+        'Playgroup & Nursery Program', 'Junior & Senior Kindergarten (KG)',
+        'Full-Day & After-School Daycare', 'Motor Skills & Sensory Play Activities', 'Phonics & Early Math Concepts'
+      ]
+    }
+  }
+  // 33. CLOTHING & BOUTIQUE
+  else if (c.includes('cloth') || c.includes('boutique') || c.includes('saree') || c.includes('apparel') || c.includes('tailor') || c.includes('fashion')) {
+    def = {
+      suggestedCategory: 'Clothing & Fashion Boutique',
+      buttons: [
+        'Exquisite & Unique Designs', 'Premium Quality Fabric', 'Perfect Fitting & Stitching',
+        'Friendly & Helpful Staff', 'Comfortable Trial Rooms', 'Trendy Latest Collection', 'Worth Every Penny'
+      ],
+      keywords: [
+        `best boutique${loc}`, `top clothing store${nearLoc}`, `designer ethnic wear and sarees${loc}`,
+        `custom bridal lehenga tailoring${loc}`, `party wear suits and gowns${loc}`, `exclusive women fashion boutique${loc}`
+      ],
+      products: [
+        'Designer Sarees & Heavy Lehengas', 'Custom Stitching & Tailoring for Suits',
+        'Handcrafted Kurti & Plazo Sets', 'Party Wear Gowns & Indo-Western Attire', 'Festive Silk & Georgette Fabrics'
+      ]
+    }
+  }
+  // 34. JEWELLERY STORE
+  else if (c.includes('jewel') || c.includes('gold') || c.includes('diamond') || c.includes('silver')) {
+    def = {
+      suggestedCategory: 'Jewellery Showroom',
+      buttons: [
+        '100% BIS Hallmarked Purity', 'Intricate & Elegant Craftsmanship', 'Honest & Transparent Weight',
+        'Polite & Knowledgeable Staff', 'Exclusive Bridal Collection', 'Fair Making Charges', 'Trusted Family Jeweller'
+      ],
+      keywords: [
+        `best jewellery showroom${loc}`, `trusted gold jeweller${nearLoc}`, `bis 916 hallmarked gold jewellery${loc}`,
+        `certified diamond engagement rings${loc}`, `custom bridal wedding jewellery set${loc}`, `pure silver coins and ornaments${loc}`
+      ],
+      products: [
+        'BIS 916 Hallmarked Gold Necklaces & Chains', 'Certified Solitaire & Diamond Jewellery',
+        'Bridal Antique & Kundan Sets', 'Pure Silver Utensils, Coins & Ornaments', 'Custom Designer Rings & Bangles'
+      ]
+    }
+  }
+  // 35. MOBILE & LAPTOP REPAIR
+  else if (c.includes('mobile') || c.includes('laptop') || c.includes('computer') || c.includes('phone repair')) {
+    def = {
+      suggestedCategory: 'Mobile & Laptop Repair',
+      buttons: [
+        'Quick 30-Minute Screen Fix', 'Original & Quality Spare Parts', 'Transparent Repair Estimate',
+        'Skilled Hardware Technician', 'Data Fully Safe & Intact', 'Service Warranty Provided', 'Polite & Honest Service'
+      ],
+      keywords: [
+        `best mobile repair shop${loc}`, `laptop repair service${nearLoc}`, `iphone and android screen replacement${loc}`,
+        `laptop battery and motherboard repair${loc}`, `macbook repair specialist${loc}`, `fast phone screen repair${loc}`
+      ],
+      products: [
+        'Smartphone Display & Touch Replacement', 'Laptop Screen, Keyboard & Battery Fix',
+        'Motherboard Chip-Level Diagnostics & Soldering', 'Water Damage Revival & Data Recovery', 'SSD & RAM Performance Upgrade'
+      ]
+    }
+  }
+  // 36. HOTEL & HOSPITALITY
+  else if (c.includes('hotel') || c.includes('resort') || c.includes('homestay') || c.includes('lodge')) {
+    def = {
+      suggestedCategory: 'Hotel & Hospitality',
+      buttons: [
+        'Spotless & Spacious Rooms', 'Extremely Courteous Staff', 'Super Comfy Bed & Linens',
+        'Delicious Complimentary Breakfast', 'Smooth Check-In Process', 'Peaceful & Safe Location', 'Great Value for Price'
+      ],
+      keywords: [
+        `best hotel to stay${loc}`, `top luxury resort${nearLoc}`, `family friendly hotel${loc}`,
+        `budget rooms with ac${loc}`, `hotel near railway station airport${loc}`, `couple friendly hotel stay${loc}`
+      ],
+      products: [
+        'Deluxe & Executive AC Rooms', 'Luxury Family Suites',
+        '24/7 Room Service & Dining', 'Complimentary High-Speed Wi-Fi & Breakfast', 'Airport / Railway Pickup & Drop'
+      ]
+    }
+  }
+  // 37. BANQUET HALL & WEDDING VENUE
+  else if (c.includes('banquet') || c.includes('event') || c.includes('wedding venue') || c.includes('lawn')) {
+    def = {
+      suggestedCategory: 'Banquet Hall & Event Venue',
+      buttons: [
+        'Magnificent Decor & Lighting', 'Spacious Air-Conditioned Hall', 'Sumptuous & Piping Hot Catering',
+        'Cooperative & Attentive Management', 'Ample Valet Parking Space', 'Spotless Washrooms', 'Memorable Event Experience'
+      ],
+      keywords: [
+        `best banquet hall${loc}`, `wedding venue with lawn${nearLoc}`, `air conditioned party hall${loc}`,
+        `birthday and anniversary party venue${loc}`, `wedding reception venue${loc}`, `catering and decoration banquet${loc}`
+      ],
+      products: [
+        'Grand Banquet Hall for Weddings (300-1000 guests)', 'Open Lawn for Sangeet & Reception',
+        'Full Turnkey Event Decor & Theme Lighting', 'Multi-Cuisine Veg & Non-Veg Catering', 'Valet Parking & Power Backup Support'
+      ]
+    }
+  }
+  // 38. PHOTOGRAPHY & STUDIO
+  else if (c.includes('photo') || c.includes('shoot') || c.includes('camera') || c.includes('video') || c.includes('studio')) {
+    def = {
+      suggestedCategory: 'Photography & Videography Studio',
+      buttons: [
+        'Stunning & Cinematic Photos', 'Creative Poses & Angles', 'Friendly & Patient Photographer',
+        'Fast Photo & Album Delivery', 'Top-Grade Color Grading', 'Comfortable Studio Setup', 'Captured Every Emotion'
+      ],
+      keywords: [
+        `best photographer${loc}`, `top wedding photography studio${nearLoc}`, `candid wedding photographer${loc}`,
+        `pre wedding cinematic shoot${loc}`, `baby and maternity photoshoot${loc}`, `commercial product photographer${loc}`
+      ],
+      products: [
+        'Candid Wedding Photography & 4K Cinema', 'Pre-Wedding Outdoor Cinematic Shoots',
+        'Maternity & Newborn Baby Photography', 'Premium Flush-Mount Wedding Photo Albums', 'Corporate Headshots & Commercial Shoots'
+      ]
+    }
+  }
+  // 39. PACKERS AND MOVERS
+  else if (c.includes('mover') || c.includes('packer') || c.includes('shift') || c.includes('transport') || c.includes('relocation')) {
+    def = {
+      suggestedCategory: 'Packers and Movers',
+      buttons: [
+        'Zero Damage to Belongings', 'Multi-Layer Safe Bubble Packing', 'Punctual & Hardworking Crew',
+        'Smooth & Stress-Free Shifting', 'No Hidden Delivery Costs', 'Safe Furniture Dismantling & Assembly', 'Honest & Professional'
+      ],
+      keywords: [
+        `best packers and movers${loc}`, `household shifting services${nearLoc}`, `local home relocation${loc}`,
+        `safe office shifting${loc}`, `car and bike transportation${loc}`, `affordable moving company${loc}`
+      ],
+      products: [
+        'Full Home Household Relocation', 'Multi-Layer Protective Bubble & Corrugated Packing',
+        'Office Relocation & IT Equipment Transit', 'Enclosed Car & Two-Wheeler Carrier Transit', 'Furniture Dismantling, Packing & Reassembly'
+      ]
+    }
+  }
+  // 40. VETERINARY & PET CARE
+  else if (c.includes('pet') || c.includes('vet') || c.includes('dog') || c.includes('animal') || c.includes('puppy')) {
+    def = {
+      suggestedCategory: 'Veterinary Clinic & Pet Care',
+      buttons: [
+        'Gentle & Loving With Pets', 'Clean & Odor-Free Clinic', 'Compassionate & Skilled Vet',
+        'Accurate Treatment & Diagnosis', 'Patient Pet Handling', 'Friendly & Helpful Staff', 'Affordable Pet Consultation'
+      ],
+      keywords: [
+        `best veterinary doctor${loc}`, `top pet clinic${nearLoc}`, `dog vaccination and deworming${loc}`,
+        `pet grooming and spa${loc}`, `emergency pet care doctor${loc}`, `puppy health checkup${loc}`
+      ],
+      products: [
+        'Comprehensive Pet Health Checkup', 'Vaccination & Deworming Schedule',
+        'Pet Medicated Bath & Grooming', 'Minor Surgery & Wound Dressing', 'Pet Diagnostic Tests & Microchipping'
+      ]
+    }
+  }
+  // 41. GROCERY & SUPERMARKET
+  else if (c.includes('grocer') || c.includes('supermarket') || c.includes('kirana') || c.includes('provision')) {
+    def = {
+      suggestedCategory: 'Grocery & Supermarket',
+      buttons: [
+        'Fresh Stock & Quality Items', 'Wide Variety of Brands', 'Neat & Organized Aisles',
+        'Fast Checkout & Billing', 'Great Discounts & Offers', 'Courteous Store Staff', 'Prompt Free Home Delivery'
+      ],
+      keywords: [
+        `best supermarket${loc}`, `grocery store near me${nearLoc}`, `fresh vegetables and fruits store${loc}`,
+        `daily needs kirana store${loc}`, `free home delivery grocery${loc}`, `organic and imported food grocery${loc}`
+      ],
+      products: [
+        'Daily Fresh Fruits & Vegetables', 'Staples, Pulses & Desi Ghee Provisions',
+        'Packaged FMCG & Dairy Products', 'Organic & Gluten-Free Food Selection', 'Household Cleaning & Personal Hygiene Essentials'
+      ]
+    }
+  }
+  // 42. HARDWARE & BUILDING MATERIALS
+  else if (c.includes('hardware') || c.includes('plywood') || c.includes('glass') || c.includes('building')) {
+    def = {
+      suggestedCategory: 'Hardware & Building Materials',
+      buttons: [
+        'Genuine Branded Hardware', 'Wholesale & Competitive Rates', 'Huge Variety in Stock',
+        'Knowledgeable & Honest Owner', 'Fast Loading & Delivery', 'Durable Quality Spares', 'Highly Reliable Shop'
+      ],
+      keywords: [
+        `best hardware store${loc}`, `building material supplier${nearLoc}`, `plywood and laminate shop${loc}`,
+        `architectural door hardware and locks${loc}`, `sanitary fittings and pipes dealer${loc}`, `power tools and fasteners${loc}`
+      ],
+      products: [
+        'Branded Door Locks, Handles & Hinges', 'Waterproof Plywood & Decorative Laminates',
+        'Power Tools, Drill Bits & Fasteners', 'PVC / CPVC Pipes & Sanitary Fittings', 'Paints, Putty & Waterproofing Sealants'
+      ]
     }
   }
 
-  if (c.includes('rest') || c.includes('cafe') || c.includes('coffee') || c.includes('bakery') || c.includes('bistro') || c.includes('bar') || c.includes('food') || c.includes('dining') || c.includes('sweet') || c.includes('pizza') || c.includes('burger')) {
-    return {
-      experienceButtons: [
-        'Delicious Food',
-        'Specialty Coffee',
-        'Cozy Ambience',
-        'Quick & Polite Service',
-        'Fresh Quality Ingredients',
-        'Great Value for Money',
-        'Lively Vibe',
-      ],
-      targetedKeywords: [
-        `best cafe${loc}`,
-        `top restaurant${loc}`,
-        'specialty coffee roasters',
-        'best brunch spot',
-        'authentic cuisine',
-        'cozy hangout cafe',
-      ],
-      productsOffered: [
-        'Artisan Coffee & Brews',
-        'Breakfast & Brunch Platters',
-        'Handmade Pastries & Desserts',
-        'Signature Chef Specials',
-      ],
-      serviceAreas: city ? [city, `Downtown ${city}`, `Delivery Zone`] : ['Local Area', 'City Wide'],
-    }
-  }
+  // Fallback for novel/unmatched niches: dynamic generation from business name & category
+  const subject = cat || biz || 'service'
+  const sampledButtons = def
+    ? shuffleSample(def.buttons, 7)
+    : shuffleSample([
+        'Top Quality Work', 'Prompt & Professional', 'Fair & Honest Pricing', 'Courteous Staff',
+        'Great Results Delivered', 'Smooth & Easy Process', 'Highly Recommended', 'Attention to Detail',
+        'Reliable & Trustworthy', 'Value for Money', 'Excellent Communication', 'Quick Turnaround'
+      ], 7)
+  const finalButtons = [...new Set([...userButtons, ...sampledButtons])].slice(0, 8)
 
-  if (c.includes('salon') || c.includes('spa') || c.includes('parlour') || c.includes('hair') || c.includes('beauty') || c.includes('skin') || c.includes('nail') || c.includes('barber')) {
-    return {
-      experienceButtons: [
-        'Skilled & Polite Stylist',
-        'Relaxing Ambience',
-        'Clean & Sanitized',
-        'Premium Haircut',
-        'High-Quality Products',
-        'Affordable Luxury',
-        'Great Makeover',
-      ],
-      targetedKeywords: [
-        `best hair salon${loc}`,
-        `top beauty parlour${loc}`,
-        'luxury spa treatment',
-        'bridal makeup specialist',
-        'keratin and hair spa',
-        'expert skin facial',
-      ],
-      productsOffered: [
-        'Hair Styling & Cuts',
-        'Keratin & Hair Spa',
-        'Facials & Skin Rejuvenation',
-        'Bridal & Party Makeup',
-        'Manicure & Pedicure',
-      ],
-      serviceAreas: city ? [city, `Local Neighborhood`] : ['Local Area'],
-    }
-  }
+  const sampledKeywords = def
+    ? shuffleSample(def.keywords, 6)
+    : shuffleSample([
+        `best ${subject}${loc}`, `trusted ${subject}${nearLoc}`, `top rated ${subject} specialist${loc}`,
+        `quality ${subject} services`, `affordable ${subject} options${loc}`, `recommended ${subject} in ${primaryArea}`
+      ], 6)
+  const finalKeywords = [...new Set([...userKeywords, ...sampledKeywords])].slice(0, 8)
 
-  if (c.includes('car') || c.includes('auto') || c.includes('motor') || c.includes('garage') || c.includes('mechanic') || c.includes('bike') || c.includes('tyre') || c.includes('repair')) {
-    return {
-      experienceButtons: [
-        'Honest Diagnostics',
-        'Quick Turnaround',
-        'Genuine Spare Parts',
-        'Fair & Transparent Pricing',
-        'Skilled Mechanics',
-        'Smooth Driving Feel',
-        'Customer Friendly',
-      ],
-      targetedKeywords: [
-        `best car repair${loc}`,
-        `trusted auto garage${loc}`,
-        'car service mechanic',
-        'brake and suspension repair',
-        'engine diagnostics specialist',
-        'fast car maintenance',
-      ],
-      productsOffered: [
-        'Complete Periodic Service',
-        'Engine Diagnostic & Tuning',
-        'Brake & Suspension Overhaul',
-        'AC Servicing & Gas Refill',
-        'Wheel Alignment & Balancing',
-      ],
-      serviceAreas: city ? [city, `Metro Area`, `Nearby Areas`] : ['Local Service Area'],
-    }
-  }
+  const baseProducts = def
+    ? def.products
+    : [
+        `${biz || 'Professional'} Core Service`,
+        `Custom ${cat || 'Client'} Solution`,
+        'Comprehensive Consultation Package',
+        'Premium Quality Offering'
+      ]
+  const finalProducts = [...new Set([...capitalizedUserServices, ...baseProducts])].slice(0, 6)
 
-  if (c.includes('gym') || c.includes('fitness') || c.includes('yoga') || c.includes('workout') || c.includes('crossfit') || c.includes('trainer')) {
-    return {
-      experienceButtons: [
-        'Modern Equipment',
-        'Supportive & Certified Trainers',
-        'Clean & Hygienic Gym',
-        'High Energy Atmosphere',
-        'Personalized Workout Plan',
-        'Visible Fitness Results',
-        'Friendly Community',
-      ],
-      targetedKeywords: [
-        `best gym${loc}`,
-        `top fitness center${loc}`,
-        'personal training gym',
-        'weight loss and muscle gain',
-        'certified yoga studio',
-      ],
-      productsOffered: [
-        'Annual Gym Membership',
-        '1-on-1 Personal Training',
-        'HIIT & Strength Classes',
-        'Custom Nutrition Coaching',
-      ],
-      serviceAreas: city ? [city, `Local Neighborhoods`] : ['Local Area'],
-    }
-  }
-
-  if (c.includes('real estate') || c.includes('property') || c.includes('realtor') || c.includes('interior') || c.includes('architect') || c.includes('construct') || c.includes('builder')) {
-    return {
-      experienceButtons: [
-        'Expert Guidance',
-        'Transparent Process',
-        'Creative & Modern Design',
-        'Timely Project Completion',
-        'Premium Quality Materials',
-        'Hassle-Free Handover',
-        'Highly Professional',
-      ],
-      targetedKeywords: [
-        `best interior designer${loc}`,
-        `trusted real estate agency${loc}`,
-        'modern home architecture',
-        'luxury commercial spaces',
-        'property consultation',
-      ],
-      productsOffered: [
-        'Turnkey Home Interiors',
-        'Modular Kitchens & Wardrobes',
-        'Residential Property Sales',
-        'Architectural 3D Planning',
-      ],
-      serviceAreas: city ? [city, `Greater ${city} Area`] : ['City Wide'],
-    }
-  }
-
-  if (c.includes('plumb') || c.includes('electr') || c.includes('hvac') || c.includes('carpenter') || c.includes('clean') || c.includes('pest') || c.includes('home service')) {
-    return {
-      experienceButtons: [
-        'Punctual & On-Time',
-        'Fixed Right the First Time',
-        'Clean & Neat Workmanship',
-        'Reasonable Rates',
-        'Courteous Technician',
-        'Prompt Emergency Response',
-      ],
-      targetedKeywords: [
-        `emergency plumber${loc}`,
-        `licensed electrician${loc}`,
-        'reliable home maintenance',
-        'expert AC repair service',
-        'fast doorstep repair',
-      ],
-      productsOffered: [
-        'Emergency Repair Service',
-        'Periodic Home Maintenance',
-        'Installation & Fittings',
-        'Deep Cleaning & Sanitization',
-      ],
-      serviceAreas: city ? [city, `All City Zones`] : ['Local Area'],
-    }
-  }
-
-  if (c.includes('law') || c.includes('legal') || c.includes('advocate') || c.includes('ca') || c.includes('account') || c.includes('tax') || c.includes('consult') || c.includes('agency') || c.includes('tech') || c.includes('software')) {
-    return {
-      experienceButtons: [
-        'Clear & Honest Advice',
-        'Prompt Communication',
-        'Thorough Documentation',
-        'Strategic Solutions',
-        'Trustworthy & Confidential',
-        'Smooth & Stress-Free',
-      ],
-      targetedKeywords: [
-        `trusted corporate legal consultant${loc}`,
-        `expert chartered accountant${loc}`,
-        'income tax and GST filing',
-        'top digital agency',
-        'business advisory services',
-      ],
-      productsOffered: [
-        'Consultation & Advisory',
-        'Annual Compliance Package',
-        'Custom Project Delivery',
-        'Audit & Risk Assessment',
-      ],
-      serviceAreas: city ? [city, `Regional Clients`, `National / Remote`] : ['Local & Remote'],
-    }
-  }
-
-  // Default / Retail
   return {
-    experienceButtons: [
-      'Top-Notch Quality',
-      'Helpful & Polite Staff',
-      'Prompt & Efficient Service',
-      'Fair & Transparent Value',
-      'Clean & Welcoming Space',
-      'Smooth Experience',
-      'Highly Recommended',
-    ],
-    targetedKeywords: [
-      `best ${category || 'service'}${loc}`,
-      `trusted local ${category || 'business'}${loc}`,
-      `top rated ${category || 'specialist'}`,
-      'quality service provider',
-      'affordable and reliable',
-    ],
-    productsOffered: [
-      'Standard Service Package',
-      'Custom Consultation',
-      'Premium Offering',
-    ],
-    serviceAreas: city ? [city, `Local Neighborhoods`] : ['City Area'],
+    suggestedCategory: def ? def.suggestedCategory : (cat || 'Local Business'),
+    experienceButtons: finalButtons,
+    targetedKeywords: finalKeywords,
+    productsOffered: finalProducts,
+    serviceAreas: dedupedAreas,
   }
 }
 
+// Backward-compatibility alias
+function getCategoryTemplate(category = '', city = '', services = '') {
+  return synthesizeSmartSEO({ category, city, services })
+}
+
 async function suggestCampaignSEO(body) {
-  const biz = body.businessName || 'Business'
+  const biz = body.businessName || ''
   const cat = body.category || ''
   const city = body.city || ''
-  const srv = body.services || ''
+  const srv = Array.isArray(body.services) ? body.services.join(', ') : String(body.services || '')
   const desc = body.description || ''
 
-  const baseline = getCategoryTemplate(cat, city, srv)
+  // 1. Instantly synthesize smart domain baseline (rich, dynamic, service-aware, zero generic defaults)
+  const smartBaseline = synthesizeSmartSEO({
+    businessName: biz,
+    category: cat,
+    city,
+    services: srv,
+    description: desc,
+  })
 
+  // 2. Attempt LLM generation for hyper-specific contextual touch
   try {
     const prompt = [
       'You are a Google Business Profile & Local SEO expert copywriter.',
-      `Generate tailored, high-converting settings for this local business to rank higher on Google Maps:`,
-      `Business: ${biz}`,
-      `Category: ${cat || 'Local Business'}`,
-      `City: ${city || 'Local Area'}`,
-      srv ? `Services: ${srv}` : '',
+      'Generate customized Local SEO settings and authentic customer experience buttons for this local business to rank higher on Google Maps:',
+      biz ? `Business Name: ${biz}` : '',
+      cat ? `Category: ${cat}` : '',
+      city ? `Location/City: ${city}` : '',
+      srv ? `Services Offered: ${srv}` : '',
       desc ? `Description: ${desc}` : '',
       '',
-      'Return ONLY a raw JSON object with these 4 keys:',
+      'Return a RAW JSON object with EXACTLY these 4 keys:',
       '{',
-      '  "experienceButtons": string[], // 6-7 authentic customer experience buttons (2-4 words each, e.g. "Delicious Cold Brew", "Cozy Ambience", "Painless Treatment", "Friendly Staff")',
+      '  "experienceButtons": string[], // 6-8 authentic customer experience buttons (2-4 words each, e.g. "Delicious Cold Brew", "Cozy Ambience", "Painless Treatment", "Friendly Staff")',
       '  "targetedKeywords": string[], // 6-8 local SEO search keywords for Google Maps ranking (e.g. "best dental clinic in Indiranagar", "specialty coffee cafe", etc.)',
-      '  "productsOffered": string[], // 3-5 popular services, products or packages offered',
+      '  "productsOffered": string[], // 4-6 specific popular services, products or packages offered',
       '  "serviceAreas": string[] // 3-5 specific neighborhoods, localities, or service zones',
       '}',
-      'RAW JSON ONLY. No markdown, no prose.',
+      'RAW JSON ONLY. No markdown, no prose, no commentary.',
     ].filter(Boolean).join('\n')
 
     const res = await callLLM([{ role: 'user', content: prompt }], 0.7)
     const parsed = extractJsonObject(res)
     if (parsed && Array.isArray(parsed.experienceButtons) && parsed.experienceButtons.length > 0) {
       return {
+        suggestedCategory: smartBaseline.suggestedCategory,
         experienceButtons: parsed.experienceButtons.slice(0, 8),
-        targetedKeywords: Array.isArray(parsed.targetedKeywords) ? parsed.targetedKeywords.slice(0, 8) : baseline.targetedKeywords,
-        productsOffered: Array.isArray(parsed.productsOffered) ? parsed.productsOffered.slice(0, 6) : baseline.productsOffered,
-        serviceAreas: Array.isArray(parsed.serviceAreas) ? parsed.serviceAreas.slice(0, 6) : baseline.serviceAreas,
+        targetedKeywords: Array.isArray(parsed.targetedKeywords) && parsed.targetedKeywords.length > 0
+          ? parsed.targetedKeywords.slice(0, 8)
+          : smartBaseline.targetedKeywords,
+        productsOffered: Array.isArray(parsed.productsOffered) && parsed.productsOffered.length > 0
+          ? parsed.productsOffered.slice(0, 6)
+          : smartBaseline.productsOffered,
+        serviceAreas: Array.isArray(parsed.serviceAreas) && parsed.serviceAreas.length > 0
+          ? parsed.serviceAreas.slice(0, 5)
+          : smartBaseline.serviceAreas,
       }
     }
   } catch (err) {
-    console.warn('[suggestCampaignSEO] AI failed, using smart baseline:', err.message)
+    console.warn('[suggestCampaignSEO] AI call failed, using dynamic synthesis engine:', err.message)
   }
 
-  return baseline
+  return smartBaseline
 }
 
 function buildCampaign(body) {
@@ -1208,7 +1842,13 @@ function buildCampaign(body) {
   const city = body.city || ''
   const srv = Array.isArray(body.services) ? body.services.join(', ') : String(body.services || '')
 
-  const template = getCategoryTemplate(category, city, srv)
+  const template = synthesizeSmartSEO({
+    businessName: body.businessName,
+    category,
+    city,
+    services: srv,
+    description: body.description,
+  })
 
   let experienceButtons = []
   if (Array.isArray(body.experienceButtons) && body.experienceButtons.length > 0) {

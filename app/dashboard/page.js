@@ -95,6 +95,7 @@ export default function App() {
       if (target === 'create') {
         setForm((f) => ({
           ...f,
+          category: f.category?.trim() ? f.category : (data.suggestedCategory || f.category),
           experienceButtons: buttons,
           targetedKeywords: kw,
           productsOffered: prod,
@@ -103,6 +104,7 @@ export default function App() {
       } else {
         setEditForm((f) => ({
           ...f,
+          category: f.category?.trim() ? f.category : (data.suggestedCategory || f.category),
           experienceButtons: buttons,
           targetedKeywords: kw,
           productsOffered: prod,
