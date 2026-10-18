@@ -60,22 +60,22 @@ function slugify(str) {
 const LLM_MODEL = process.env.GEMINI_MODEL || process.env.OPENROUTER_MODEL || process.env.LLM_MODEL || 'gemini-1.5-flash'
 
 const FAST_OPENROUTER_MODELS = [
+  'google/gemini-2.0-flash-001',
+  'google/gemini-2.5-flash',
+  'google/gemini-flash-1.5',
   'openrouter/auto',
-  'google/gemma-4-31b-it:free',
-  'nvidia/nemotron-3.5-lightning:free',
-  'google/gemma-4-26b-a4b-it:free',
-  'liquid/lfm-2.5-2.6b:free',
 ]
 
 async function callOpenRouter(apiKey, messages, temperature = 0.85) {
   const cleanKey = String(apiKey || '').trim().replace(/^["']|["']$/g, '')
   if (!cleanKey) throw new Error('OpenRouter API key is empty')
 
-  const initialModel = process.env.OPENROUTER_MODEL || 'openrouter/auto'
+  const initialModel = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001'
   const candidateModels = [initialModel, ...FAST_OPENROUTER_MODELS]
   const modelsToTry = []
   for (const m of candidateModels) {
     if (m && !modelsToTry.includes(m)) modelsToTry.push(m)
+    if (modelsToTry.length >= 2) break // Max 2 quick attempts
   }
 
   let lastErr = null
@@ -93,8 +93,9 @@ async function callOpenRouter(apiKey, messages, temperature = 0.85) {
           model,
           messages,
           temperature,
+          max_tokens: 650,
         }),
-        signal: AbortSignal.timeout(8500), // Max 8.5 seconds per attempt
+        signal: AbortSignal.timeout(6000), // Max 6 seconds per attempt for blazing fast response
       })
 
       const data = await res.json().catch(() => ({}))
