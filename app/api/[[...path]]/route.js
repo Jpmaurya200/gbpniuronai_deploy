@@ -57,24 +57,25 @@ function slugify(str) {
 // ---------------------------------------------------------------------------
 // AI Provider Abstraction: OpenRouter, Google Gemini, and Emergent Gateway
 // ---------------------------------------------------------------------------
-const LLM_MODEL = process.env.OPENROUTER_MODEL || process.env.GEMINI_MODEL || process.env.LLM_MODEL || 'openrouter/free'
+const LLM_MODEL = process.env.GEMINI_MODEL || process.env.OPENROUTER_MODEL || process.env.LLM_MODEL || 'gemini-1.5-flash'
 
-const FREE_OPENROUTER_MODELS = [
-  'openrouter/free',
-  'google/gemma-4-31b-it:free',
-  'qwen/qwen3.8-27b:free',
-  'google/gemma-4-26b-a4b-it:free',
-  'nvidia/nemotron-3.5-lightning:free',
+const FAST_OPENROUTER_MODELS = [
+  'google/gemini-2.0-flash-001',
+  'google/gemini-flash-1.5',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'meta-llama/llama-3.1-8b-instruct:free',
+  'mistralai/mistral-small-24b-instruct-2501:free',
 ]
 
 async function callOpenRouter(apiKey, messages, temperature = 0.85) {
   const cleanKey = String(apiKey || '').trim().replace(/^["']|["']$/g, '')
   if (!cleanKey) throw new Error('OpenRouter API key is empty')
 
-  const initialModel = process.env.OPENROUTER_MODEL || 'openrouter/free'
+  const initialModel = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001'
   const modelsToTry = [initialModel]
-  for (const fm of FREE_OPENROUTER_MODELS) {
+  for (const fm of FAST_OPENROUTER_MODELS) {
     if (!modelsToTry.includes(fm)) modelsToTry.push(fm)
+    if (modelsToTry.length >= 2) break // Max 2 quick attempts to avoid long user waiting times
   }
 
   let lastErr = null
@@ -93,6 +94,7 @@ async function callOpenRouter(apiKey, messages, temperature = 0.85) {
           messages,
           temperature,
         }),
+        signal: AbortSignal.timeout(6000), // Max 6 seconds per attempt
       })
 
       const data = await res.json().catch(() => ({}))
@@ -100,9 +102,7 @@ async function callOpenRouter(apiKey, messages, temperature = 0.85) {
         const errMsg = data?.error?.message || `OpenRouter request failed (${res.status})`
         console.warn(`[OpenRouter: ${model}] HTTP ${res.status}: ${errMsg}`)
         lastErr = new Error(errMsg)
-        // If 401 Unauthorized, key itself is invalid
         if (res.status === 401) throw lastErr
-        // If 402 (Payment required / Insufficient credits), 404 (model not found), or 429, try next free model
         continue
       }
 
@@ -122,13 +122,15 @@ async function callOpenRouter(apiKey, messages, temperature = 0.85) {
 
 async function callGemini(apiKey, messages, temperature = 0.85) {
   const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+  const cleanKey = String(apiKey || '').trim().replace(/^["']|["']$/g, '')
   const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${cleanKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ model, messages, temperature }),
+    signal: AbortSignal.timeout(7000), // 7 seconds timeout
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -147,6 +149,7 @@ async function callEmergent(apiKey, messages, temperature = 0.85) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ model: llmModel, messages, temperature }),
+    signal: AbortSignal.timeout(7000),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -158,16 +161,16 @@ async function callEmergent(apiKey, messages, temperature = 0.85) {
 async function callLLM(messages, temperature = 0.85) {
   const envEmergent = process.env.EMERGENT_LLM_KEY || ''
 
-  // 1. Auto-detect OpenRouter key (explicit OPENROUTER_API_KEY / OPENROUTER_KEY or prefixed with sk-or- or sk-)
+  // 1. Auto-detect Gemini key (explicit GEMINI_API_KEY or prefixed with AIzaSy)
+  const geminiKey =
+    process.env.GEMINI_API_KEY ||
+    (envEmergent.startsWith('AIzaSy') ? envEmergent : null)
+
+  // 2. Auto-detect OpenRouter key (explicit OPENROUTER_API_KEY / OPENROUTER_KEY or prefixed with sk-or- or sk-)
   const openrouterKey =
     process.env.OPENROUTER_API_KEY ||
     process.env.OPENROUTER_KEY ||
     (envEmergent.startsWith('sk-or-') || envEmergent.startsWith('sk-') ? envEmergent : null)
-
-  // 2. Auto-detect Gemini key (explicit GEMINI_API_KEY or prefixed with AIzaSy)
-  const geminiKey =
-    process.env.GEMINI_API_KEY ||
-    (envEmergent.startsWith('AIzaSy') ? envEmergent : null)
 
   // 3. Emergent universal gateway key
   const emergentKey =
@@ -175,12 +178,13 @@ async function callLLM(messages, temperature = 0.85) {
       ? envEmergent
       : null
 
+  // Prioritize Google Gemini first: 0.8 second direct response time without queue
   const providers = []
-  if (openrouterKey) {
-    providers.push({ name: 'OpenRouter', fn: () => callOpenRouter(openrouterKey, messages, temperature) })
-  }
   if (geminiKey) {
     providers.push({ name: 'Google Gemini', fn: () => callGemini(geminiKey, messages, temperature) })
+  }
+  if (openrouterKey) {
+    providers.push({ name: 'OpenRouter', fn: () => callOpenRouter(openrouterKey, messages, temperature) })
   }
   if (emergentKey) {
     providers.push({ name: 'Emergent Gateway', fn: () => callEmergent(emergentKey, messages, temperature) })
