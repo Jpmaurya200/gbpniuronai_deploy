@@ -25,12 +25,14 @@ import {
 import {
   Sparkles, Plus, QrCode, BarChart3, ExternalLink, Copy, Trash2, MapPin,
   Download, Zap, MessageSquareQuote, Rocket, Link2, Pencil, ArrowUp, ArrowDown, X,
-  Store,
+  Store, Tag, Package,
 } from 'lucide-react'
 
 const empty = {
   businessName: '', category: '', city: '', services: '', description: '',
+  targetedKeywords: '', productsOffered: '', serviceAreas: '',
   headline: '', subheadline: '', googleReviewUrl: '', primaryColor: '#6d28d9',
+  experienceButtons: [],
 }
 
 export default function App() {
@@ -42,6 +44,8 @@ export default function App() {
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState(empty)
   const [saving, setSaving] = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
+  const [createBtn, setCreateBtn] = useState('')
 
   const [qrCampaign, setQrCampaign] = useState(null)
   const [qrConfig, setQrConfig] = useState(null)
@@ -57,10 +61,87 @@ export default function App() {
 
   const uid = () => (crypto?.randomUUID?.() || String(Date.now()) + Math.random().toString(36).slice(2))
 
+  const autoSuggestSEO = async (target = 'create') => {
+    const src = target === 'create' ? form : editForm
+    if (!src?.businessName?.trim() && !src?.category?.trim()) {
+      toast.error('Please enter Business Name or Category first')
+      return
+    }
+    setSuggesting(true)
+    try {
+      const res = await fetch('/api/campaigns/suggest-seo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          businessName: src.businessName,
+          category: src.category,
+          city: src.city,
+          services: src.services,
+          description: src.description,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to fetch suggestions')
+      const data = await res.json()
+
+      const buttons = (data.experienceButtons || []).map((label) => ({
+        id: uid(),
+        label,
+        enabled: true,
+      }))
+      const kw = Array.isArray(data.targetedKeywords) ? data.targetedKeywords.join(', ') : (data.targetedKeywords || '')
+      const prod = Array.isArray(data.productsOffered) ? data.productsOffered.join(', ') : (data.productsOffered || '')
+      const areas = Array.isArray(data.serviceAreas) ? data.serviceAreas.join(', ') : (data.serviceAreas || '')
+
+      if (target === 'create') {
+        setForm((f) => ({
+          ...f,
+          experienceButtons: buttons,
+          targetedKeywords: kw,
+          productsOffered: prod,
+          serviceAreas: areas,
+        }))
+      } else {
+        setEditForm((f) => ({
+          ...f,
+          experienceButtons: buttons,
+          targetedKeywords: kw,
+          productsOffered: prod,
+          serviceAreas: areas,
+        }))
+      }
+      toast.success('✨ Auto-filled smart buttons, SEO keywords & offerings!')
+    } catch (err) {
+      toast.error(err.message || 'Auto-suggest failed')
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  const addCreateBtn = () => {
+    const label = createBtn.trim()
+    if (!label) return
+    setForm((f) => ({
+      ...f,
+      experienceButtons: [...(f.experienceButtons || []), { id: uid(), label, enabled: true }],
+    }))
+    setCreateBtn('')
+  }
+  const removeCreateBtn = (id) => setForm((f) => ({
+    ...f,
+    experienceButtons: (f.experienceButtons || []).filter((b) => b.id !== id),
+  }))
+  const toggleCreateBtn = (id) => setForm((f) => ({
+    ...f,
+    experienceButtons: (f.experienceButtons || []).map((b) => (b.id === id ? { ...b, enabled: !b.enabled } : b)),
+  }))
+
   const openEditor = (c) => {
     setEditForm({
       ...c,
       services: Array.isArray(c.services) ? c.services.join(', ') : (c.services || ''),
+      targetedKeywords: Array.isArray(c.targetedKeywords) ? c.targetedKeywords.join(', ') : (c.targetedKeywords || ''),
+      productsOffered: Array.isArray(c.productsOffered) ? c.productsOffered.join(', ') : (c.productsOffered || ''),
+      serviceAreas: Array.isArray(c.serviceAreas) ? c.serviceAreas.join(', ') : (c.serviceAreas || ''),
       secondaryColor: c.secondaryColor || c.primaryColor,
       experienceButtons: (c.experienceButtons || []).map((b) => ({ ...b })),
       allowMultiSelect: c.allowMultiSelect !== false,
@@ -166,8 +247,12 @@ export default function App() {
     if (!form.businessName.trim()) { toast.error('Business name is required'); return }
     setSaving(true)
     try {
+      const payload = {
+        ...form,
+        experienceButtons: form.experienceButtons?.length ? form.experienceButtons : undefined,
+      }
       const res = await fetch('/api/campaigns', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
@@ -515,10 +600,10 @@ export default function App() {
 
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Create Review Campaign</DialogTitle>
-            <DialogDescription>The AI uses this business context to draft authentic reviews. No fabricated details.</DialogDescription>
+            <DialogDescription>The AI uses your business offerings and targeted keywords to draft authentic, SEO-optimized Google reviews.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             {gbpLocations.length > 0 && (
@@ -555,11 +640,100 @@ export default function App() {
               <Input value={form.businessName} onChange={(e) => setForm({ ...form, businessName: e.target.value })} placeholder="e.g. Aroma Bistro & Cafe" />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Category</Label><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Cafe & Restaurant" /></div>
-              <div className="space-y-1.5"><Label>City / Location</Label><Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Bengaluru" /></div>
+              <div className="space-y-1.5"><Label>Category *</Label><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="e.g. Cafe, Dental Clinic, Auto Repair" /></div>
+              <div className="space-y-1.5"><Label>City / Primary Location</Label><Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="e.g. Indiranagar, Bengaluru" /></div>
             </div>
-            <div className="space-y-1.5"><Label>Services (comma separated)</Label><Input value={form.services} onChange={(e) => setForm({ ...form, services: e.target.value })} placeholder="Specialty Coffee, Breakfast, Desserts" /></div>
-            <div className="space-y-1.5"><Label>Business description</Label><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="A cosy neighbourhood cafe known for specialty coffee..." rows={2} /></div>
+            <div className="space-y-1.5"><Label>Services Offered (comma separated)</Label><Input value={form.services} onChange={(e) => setForm({ ...form, services: e.target.value })} placeholder="e.g. Specialty Coffee, Artisanal Bakery, Breakfast" /></div>
+            <div className="space-y-1.5"><Label>Business description</Label><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="A cosy neighbourhood cafe known for specialty coffee roasts and fresh brunch..." rows={2} /></div>
+
+            {/* AI Auto-Suggest Button */}
+            <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-indigo-50 p-3 text-center">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
+                <div className="text-left">
+                  <p className="text-xs font-semibold text-violet-900 flex items-center gap-1.5">
+                    <Sparkles className="h-4 w-4 text-violet-600" /> Smart AI SEO Suggester
+                  </p>
+                  <p className="text-[11px] text-violet-700">Auto-fills targeted keywords, products &amp; custom buttons based on your business.</p>
+                </div>
+                <Button type="button" size="sm" onClick={() => autoSuggestSEO('create')} disabled={suggesting} className="bg-violet-600 hover:bg-violet-700 text-white text-xs shrink-0">
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5" /> {suggesting ? 'Generating...' : 'Auto-Generate SEO & Buttons'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Local SEO & Offerings Section */}
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <div className="space-y-1.5">
+                <Label className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                  <Tag className="h-3.5 w-3.5 text-violet-600" /> Targeted Local SEO Keywords (comma separated)
+                </Label>
+                <Input value={form.targetedKeywords} onChange={(e) => setForm({ ...form, targetedKeywords: e.target.value })} placeholder="e.g. best cafe in indiranagar, specialty coffee roasters, top breakfast place" className="bg-white" />
+                <p className="text-[11px] text-slate-500">Google highlights these keywords in reviews to boost your Google Maps ranking.</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                    <Package className="h-3.5 w-3.5 text-violet-600" /> Products / Key Offerings
+                  </Label>
+                  <Input value={form.productsOffered} onChange={(e) => setForm({ ...form, productsOffered: e.target.value })} placeholder="e.g. Cold Brew, Sourdough Bread" className="bg-white" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                    <MapPin className="h-3.5 w-3.5 text-violet-600" /> Service Areas / Localities
+                  </Label>
+                  <Input value={form.serviceAreas} onChange={(e) => setForm({ ...form, serviceAreas: e.target.value })} placeholder="e.g. Indiranagar, Koramangala" className="bg-white" />
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Experience Buttons */}
+            <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold text-slate-800">Quick Experience Buttons (Review Options)</Label>
+                <span className="text-[11px] text-slate-400">{(form.experienceButtons || []).filter((b) => b.enabled).length} active</span>
+              </div>
+              <p className="text-[11px] text-slate-500">Buttons customers tap to describe what they liked. Tailored to your category.</p>
+
+              {(form.experienceButtons || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {form.experienceButtons.map((b) => (
+                    <span
+                      key={b.id}
+                      onClick={() => toggleCreateBtn(b.id)}
+                      className={`inline-flex items-center gap-1 cursor-pointer rounded-full px-2.5 py-1 text-xs font-medium border transition ${
+                        b.enabled
+                          ? 'border-violet-300 bg-violet-50 text-violet-700'
+                          : 'border-slate-200 bg-slate-100 text-slate-400 line-through'
+                      }`}
+                    >
+                      {b.label}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); removeCreateBtn(b.id) }}
+                        className="ml-1 hover:text-red-500"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-2 flex gap-2">
+                <Input
+                  value={createBtn}
+                  onChange={(e) => setCreateBtn(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addCreateBtn())}
+                  placeholder="Add custom button, e.g. Painless Root Canal"
+                  className="h-8 text-xs"
+                />
+                <Button type="button" variant="outline" size="sm" onClick={addCreateBtn} className="h-8 text-xs">
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add
+                </Button>
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <Label>Google review link</Label>
               <Input value={form.googleReviewUrl} onChange={(e) => setForm({ ...form, googleReviewUrl: e.target.value })} placeholder="https://search.google.com/local/writereview?placeid=..." />
@@ -582,12 +756,13 @@ export default function App() {
         <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit Campaign</DialogTitle>
-            <DialogDescription>Customize branding, experience buttons and settings. Changes apply to the public review page instantly.</DialogDescription>
+            <DialogDescription>Customize branding, SEO keywords, experience buttons and settings. Changes apply to the review page instantly.</DialogDescription>
           </DialogHeader>
           {editForm && (
             <Tabs defaultValue="branding" className="w-full">
-              <TabsList className="grid w-full grid-cols-4">
+              <TabsList className="grid w-full grid-cols-5">
                 <TabsTrigger value="branding">Branding</TabsTrigger>
+                <TabsTrigger value="seo">SEO &amp; Offerings</TabsTrigger>
                 <TabsTrigger value="buttons">Buttons</TabsTrigger>
                 <TabsTrigger value="automation">Automation</TabsTrigger>
                 <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -613,6 +788,60 @@ export default function App() {
                 <div className="space-y-1.5"><Label>Logo URL</Label><Input value={editForm.logoUrl || ''} onChange={(e) => setEF({ logoUrl: e.target.value })} placeholder="https://..." /></div>
               </TabsContent>
 
+              {/* SEO & Offerings */}
+              <TabsContent value="seo" className="space-y-4 py-3">
+                <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-indigo-50 p-3.5">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-semibold text-violet-900 flex items-center gap-1.5">
+                        <Sparkles className="h-4 w-4 text-violet-600" /> AI Local SEO Generator
+                      </p>
+                      <p className="text-[11px] text-violet-700">Automatically optimize targeted keywords, products &amp; service areas.</p>
+                    </div>
+                    <Button type="button" size="sm" onClick={() => autoSuggestSEO('edit')} disabled={suggesting} className="bg-violet-600 hover:bg-violet-700 text-white text-xs shrink-0">
+                      <Sparkles className="mr-1.5 h-3.5 w-3.5" /> {suggesting ? 'Generating...' : 'Auto-Suggest with AI'}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-1.5">
+                    <Tag className="h-3.5 w-3.5 text-violet-600" /> Targeted SEO Keywords (comma separated)
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    value={editForm.targetedKeywords}
+                    onChange={(e) => setEF({ targetedKeywords: e.target.value })}
+                    placeholder="e.g. best cafe in indiranagar, specialty coffee roasters, top breakfast place"
+                  />
+                  <p className="text-[11px] text-slate-500">These search terms are intelligently woven into review drafts to boost your Google Business Profile rankings.</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-1.5">
+                    <Package className="h-3.5 w-3.5 text-violet-600" /> Products / Key Offerings (comma separated)
+                  </Label>
+                  <Input
+                    value={editForm.productsOffered}
+                    onChange={(e) => setEF({ productsOffered: e.target.value })}
+                    placeholder="e.g. Cold Brew, Sourdough Bread, Croissants, Chemex Brew"
+                  />
+                  <p className="text-[11px] text-slate-500">Specific items or services mentioned in reviews highlight Google's 'People often mention' section.</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-1.5">
+                    <MapPin className="h-3.5 w-3.5 text-violet-600" /> Service Areas / Localities (comma separated)
+                  </Label>
+                  <Input
+                    value={editForm.serviceAreas}
+                    onChange={(e) => setEF({ serviceAreas: e.target.value })}
+                    placeholder="e.g. Indiranagar, Koramangala, Whitefield, Central Bangalore"
+                  />
+                  <p className="text-[11px] text-slate-500">Neighborhoods and surrounding areas you serve to dominate local proximity searches.</p>
+                </div>
+              </TabsContent>
+
               {/* Buttons */}
               <TabsContent value="buttons" className="space-y-4 py-3">
                 <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
@@ -625,7 +854,12 @@ export default function App() {
                 </div>
 
                 <div>
-                  <Label className="mb-2 block">Experience buttons</Label>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="block">Experience buttons</Label>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => autoSuggestSEO('edit')} disabled={suggesting} className="h-7 text-xs text-violet-600 hover:text-violet-700 hover:bg-violet-50">
+                      <Sparkles className="mr-1 h-3.5 w-3.5" /> AI Suggest Buttons
+                    </Button>
+                  </div>
                   <div className="space-y-2">
                     {editForm.experienceButtons.map((b, idx) => (
                       <div key={b.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-2">
@@ -642,7 +876,7 @@ export default function App() {
                     ))}
                   </div>
                   <div className="mt-3 flex gap-2">
-                    <Input value={newBtn} onChange={(e) => setNewBtn(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addBtn())} placeholder="Add a custom button, e.g. Great Ambience" className="h-9" />
+                    <Input value={newBtn} onChange={(e) => setNewBtn(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addBtn())} placeholder="Add a custom button, e.g. Painless Treatment" className="h-9" />
                     <Button type="button" variant="outline" onClick={addBtn}><Plus className="mr-1 h-4 w-4" /> Add</Button>
                   </div>
                 </div>

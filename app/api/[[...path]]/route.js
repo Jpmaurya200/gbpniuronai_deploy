@@ -286,28 +286,34 @@ function buildFallbackDrafts(campaign, experiences = [], customerText = '') {
   const expList = experiences.length ? experiences.join(', ') : 'great service'
   const note = customerText ? ` ${customerText.trim()}` : ''
 
+  // Specific service, product, or keyword mention for local SEO
+  const serviceMention = (campaign.services?.[0] || campaign.productsOffered?.[0] || campaign.category || '')
+  const areaMention = (campaign.serviceAreas?.[0] || campaign.city || '')
+  const servicePhrase = serviceMention ? ` for ${serviceMention}` : ''
+  const areaPhrase = areaMention ? ` in ${areaMention}` : ''
+
   const concisePool = [
-    `Had a wonderful experience at ${biz}${city}. Really impressed with the ${expList}!${note} Highly recommended.`,
-    `Excellent visit to ${biz}${city}. The ${expList} truly stood out.${note} Will be recommending to everyone!`,
+    `Had a wonderful experience with ${biz}${areaPhrase}. Really impressed with their ${expList}${servicePhrase}!${note} Highly recommended.`,
+    `Excellent visit to ${biz}${areaPhrase}. The ${expList} truly stood out.${note} Best choice for ${serviceMention || 'quality service'}!`,
     `Top-notch experience with ${biz}${city}. Appreciated the ${expList} from start to finish.${note} 5 stars!`,
-    `Great visit to ${biz}. Everything was handled smoothly, especially the ${expList}.${note} Thank you!`,
-    `Very happy with my visit to ${biz}${city}. The focus on ${expList} made all the difference.${note}`,
+    `Great visit to ${biz}. Everything was handled smoothly, especially the ${expList}${servicePhrase}.${note} Thank you!`,
+    `Very happy with my experience at ${biz}${areaPhrase}. The focus on ${expList} made all the difference.${note}`,
   ]
 
   const detailedPool = [
-    `Visited ${biz} recently and was genuinely pleased with my experience. The ${expList} stood out immediately.${note} The team was attentive and very professional throughout. Will definitely be returning!`,
-    `I recently had an appointment at ${biz}${city} and cannot praise them enough. Their attention to ${expList} was evident throughout the entire visit.${note} Looking forward to coming back.`,
-    `If you are looking for quality care in ${city || 'the area'}, ${biz} is the place to go. The ${expList} was second to none.${note} Truly appreciate the great service shown during my visit.`,
-    `Very thorough and pleasant experience at ${biz}. You can tell they take immense pride in their ${expList}.${note} Everything went seamlessly from beginning to end!`,
-    `My visit to ${biz}${city} was exceptional. The commitment to ${expList} made me feel valued as a customer.${note} Highly deserving of all five stars.`,
+    `Visited ${biz}${areaPhrase} recently and was genuinely pleased with my experience. The ${expList} stood out immediately.${note} If you are looking for ${serviceMention || 'top quality care'}${areaPhrase}, this is definitely the place to go. Will be returning!`,
+    `I recently used ${biz}${city} and cannot praise them enough. Their attention to ${expList} was evident throughout${servicePhrase}.${note} Looking forward to coming back!`,
+    `If you are looking for ${serviceMention || 'exceptional quality'} in ${areaMention || city || 'the area'}, ${biz} is the place to go. The ${expList} was second to none.${note} Truly appreciate the great service.`,
+    `Very thorough and pleasant experience at ${biz}. You can tell they take immense pride in their ${expList} and ${serviceMention || 'customer satisfaction'}.${note} Everything went seamlessly!`,
+    `My experience with ${biz}${areaPhrase} was exceptional. The commitment to ${expList} made me feel completely valued.${note} Highly deserving of all five stars.`,
   ]
 
   const warmPool = [
-    `So glad I visited ${biz}! Loved the ${expList}.${note} Thank you so much to the entire team for such good care. 5 stars all the way!`,
-    `Such a warm and welcoming experience at ${biz}${city}! The ${expList} made my day so much easier.${note} Heartfelt thanks to everyone there!`,
+    `So glad I chose ${biz}! Loved the ${expList}${servicePhrase}.${note} Thank you so much to the entire team for such good care. 5 stars all the way!`,
+    `Such a warm and welcoming experience at ${biz}${areaPhrase}! The ${expList} made everything so smooth and easy.${note} Heartfelt thanks to everyone there!`,
     `Can't say enough good things about ${biz}! The ${expList} was fantastic and made me feel right at home.${note} Definitely coming back!`,
     `Big thank you to the wonderful team at ${biz}${city}! Loved the ${expList} and the personalized support.${note} 10/10 experience!`,
-    `Truly grateful for the experience at ${biz}. Loved how caring and attentive they were, especially regarding ${expList}.${note} Thank you!`,
+    `Truly grateful for the experience at ${biz}. Loved how caring and attentive they were, especially regarding ${expList}${servicePhrase}.${note} Thank you!`,
   ]
 
   return [
@@ -328,54 +334,58 @@ function buildFallbackDrafts(campaign, experiences = [], customerText = '') {
 
 async function generateReviewDrafts(campaign, experiences = [], customerText = '') {
   const services = (campaign.services || []).join(', ')
+  const products = (campaign.productsOffered || []).join(', ')
+  const serviceAreas = (campaign.serviceAreas || []).join(', ')
+  const keywords = (campaign.targetedKeywords || []).join(', ')
   const expList = (experiences || []).join(', ')
   const nonce = Math.random().toString(36).slice(2, 7)
 
   const system = [
-    'You help a real customer turn their genuine experience into an authentic, editable Google review draft.',
-    'STRICT RULES:',
-    '- Only use what the customer actually indicated. Never invent services, staff names, prices, discounts, guarantees, outcomes or experiences the customer did not mention.',
-    '- Do NOT keyword-stuff. Do NOT repeat exact-match keywords unnaturally. Sound natural and human.',
-    '- Naturally weave in the business name and city only where it reads naturally.',
-    '- Keep it first-person, honest, and specific to the selected experience.',
-    '- Never guarantee ratings or claim it improves rankings.',
-    'Return ONLY a JSON array of exactly 3 objects, each: {"style": string, "text": string}. No prose, no markdown.',
+    'You are an expert Google Local SEO and authentic customer review copywriter.',
+    'Your goal: Generate 3 genuine, natural Google review drafts from a real customer\'s perspective that help this business rank higher on Google Maps and Local Search for its core services, products, and locations.',
+    'STRICT LOCAL SEO & AUTHENTICITY RULES:',
+    '- Deeply understand the business context, category, services, and location.',
+    '- Naturally weave in the business name, city/neighborhood, selected customer experiences, and relevant services or products offered.',
+    '- Strategically and organically include 1 or 2 targeted local SEO keywords or natural variations where they sound completely human and effortless.',
+    '- NEVER sound promotional, robotic, or stuffed. Write in realistic, first-person human speech ("I visited...", "I had...", "We hired...", "Loved the...").',
+    '- Keep reviews believable, honest, and helpful to future customers searching Google Maps.',
+    '- Return ONLY a raw JSON array of exactly 3 objects: [{"style": string, "text": string}]. No extra commentary, no markdown code block formatting.',
   ].join('\n')
 
   const user = [
-    `Business name: ${campaign.businessName || ''}`,
+    `Business Name: ${campaign.businessName || ''}`,
     `Category: ${campaign.category || ''}`,
-    `City / Location: ${campaign.city || ''}`,
-    services ? `Services: ${services}` : '',
-    campaign.description ? `Business context: ${campaign.description}` : '',
+    `City / Primary Location: ${campaign.city || ''}`,
+    serviceAreas ? `Service Areas / Localities: ${serviceAreas}` : '',
+    services ? `Services Offered: ${services}` : '',
+    products ? `Products / Key Offerings: ${products}` : '',
+    keywords ? `Targeted Local SEO Keywords: ${keywords}` : '',
+    campaign.description ? `Business Details & Specialty: ${campaign.description}` : '',
     `Language: ${campaign.language || 'English'}`,
     '',
-    `Customer selected these experiences: ${expList || '(none specified)'}`,
-    customerText ? `Customer wrote (optional): "${customerText}"` : 'Customer left the optional note empty.',
+    `Customer Selected Experience(s): ${expList || '(none specified)'}`,
+    customerText ? `Customer Personal Note: "${customerText}"` : 'Customer Personal Note: (none)',
     '',
-    `Variation seed: ${nonce}`,
-    'Produce exactly 3 DISTINCT, creative review drafts, genuinely different from each other:',
-    '1) style "Natural & Concise" — short, 1-2 sentences.',
-    '2) style "Detailed & Experience-Focused" — 3-4 sentences, focused on the experience.',
-    '3) style "Warm & Conversational" — friendly and personable.',
-    'Each draft must reflect the selected experiences and any customer text. Editable by the customer.',
-  ]
-    .filter(Boolean)
-    .join('\n')
+    `Draft Variation Seed: ${nonce}`,
+    'Produce exactly 3 DISTINCT, creative review drafts:',
+    '1) style "Natural & Concise" — 1-2 punchy sentences mentioning the core service/product and high satisfaction.',
+    '2) style "Detailed & Experience-Focused" — 3-4 sentences detailing the specific service/product, neighborhood/city, and why you recommend them (Great for Local Google Search rank).',
+    '3) style "Warm & Conversational" — Friendly, heartfelt appreciation mentioning how helpful and professional the team was.',
+  ].filter(Boolean).join('\n')
 
   try {
     const content = await callLLM([
       { role: 'system', content: system },
       { role: 'user', content: user },
-    ], 0.9)
+    ], 0.85)
 
     let arr = extractJsonArray(content)
     if (!Array.isArray(arr) || arr.length === 0) {
-      // one retry with stricter instruction
+      // one quick retry with stricter instruction
       const retry = await callLLM([
         { role: 'system', content: system },
-        { role: 'user', content: user + '\n\nIMPORTANT: Output must be a raw JSON array only.' },
-      ], 0.8)
+        { role: 'user', content: user + '\n\nIMPORTANT: Output must be a raw JSON array only: [{"style": "...", "text": "..."}]' },
+      ], 0.75)
       arr = extractJsonArray(retry)
     }
     if (Array.isArray(arr) && arr.length > 0) {
@@ -885,32 +895,361 @@ async function runAudit(db, profile, campaignId, orgId) {
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
-const DEFAULT_BUTTONS = [
-  'Great Service',
-  'Friendly Staff',
-  'Professional Team',
-  'Quick Service',
-  'Quality Service',
-  'Clean & Comfortable',
-  'Value for Money',
-  'Highly Satisfied',
-].map((label) => ({ id: uuidv4(), label, enabled: true }))
+function getCategoryTemplate(category = '', city = '', services = '') {
+  const c = String(category || '').toLowerCase()
+  const loc = city ? ` in ${city}` : ''
+
+  if (c.includes('dent') || c.includes('teeth') || c.includes('clinic') || c.includes('doctor') || c.includes('hospital') || c.includes('physio') || c.includes('health') || c.includes('medical')) {
+    return {
+      experienceButtons: [
+        'Painless Treatment',
+        'Gentle & Caring Doctor',
+        'Modern & Clean Clinic',
+        'Friendly Staff',
+        'Transparent Pricing',
+        'Quick Appointment',
+        'Highly Recommended',
+      ],
+      targetedKeywords: [
+        `best dental clinic${loc}`,
+        `top dentist${loc}`,
+        'painless root canal treatment',
+        'teeth cleaning and whitening',
+        'expert dental care',
+        'dental implants specialist',
+      ],
+      productsOffered: [
+        'Routine Dental Checkup',
+        'Teeth Cleaning & Whitening',
+        'Root Canal Treatment',
+        'Dental Implants',
+        'Clear Aligners / Braces',
+      ],
+      serviceAreas: city ? [city, `Central ${city}`, `Local Neighborhood`] : ['Local Area', 'City Center'],
+    }
+  }
+
+  if (c.includes('rest') || c.includes('cafe') || c.includes('coffee') || c.includes('bakery') || c.includes('bistro') || c.includes('bar') || c.includes('food') || c.includes('dining') || c.includes('sweet') || c.includes('pizza') || c.includes('burger')) {
+    return {
+      experienceButtons: [
+        'Delicious Food',
+        'Specialty Coffee',
+        'Cozy Ambience',
+        'Quick & Polite Service',
+        'Fresh Quality Ingredients',
+        'Great Value for Money',
+        'Lively Vibe',
+      ],
+      targetedKeywords: [
+        `best cafe${loc}`,
+        `top restaurant${loc}`,
+        'specialty coffee roasters',
+        'best brunch spot',
+        'authentic cuisine',
+        'cozy hangout cafe',
+      ],
+      productsOffered: [
+        'Artisan Coffee & Brews',
+        'Breakfast & Brunch Platters',
+        'Handmade Pastries & Desserts',
+        'Signature Chef Specials',
+      ],
+      serviceAreas: city ? [city, `Downtown ${city}`, `Delivery Zone`] : ['Local Area', 'City Wide'],
+    }
+  }
+
+  if (c.includes('salon') || c.includes('spa') || c.includes('parlour') || c.includes('hair') || c.includes('beauty') || c.includes('skin') || c.includes('nail') || c.includes('barber')) {
+    return {
+      experienceButtons: [
+        'Skilled & Polite Stylist',
+        'Relaxing Ambience',
+        'Clean & Sanitized',
+        'Premium Haircut',
+        'High-Quality Products',
+        'Affordable Luxury',
+        'Great Makeover',
+      ],
+      targetedKeywords: [
+        `best hair salon${loc}`,
+        `top beauty parlour${loc}`,
+        'luxury spa treatment',
+        'bridal makeup specialist',
+        'keratin and hair spa',
+        'expert skin facial',
+      ],
+      productsOffered: [
+        'Hair Styling & Cuts',
+        'Keratin & Hair Spa',
+        'Facials & Skin Rejuvenation',
+        'Bridal & Party Makeup',
+        'Manicure & Pedicure',
+      ],
+      serviceAreas: city ? [city, `Local Neighborhood`] : ['Local Area'],
+    }
+  }
+
+  if (c.includes('car') || c.includes('auto') || c.includes('motor') || c.includes('garage') || c.includes('mechanic') || c.includes('bike') || c.includes('tyre') || c.includes('repair')) {
+    return {
+      experienceButtons: [
+        'Honest Diagnostics',
+        'Quick Turnaround',
+        'Genuine Spare Parts',
+        'Fair & Transparent Pricing',
+        'Skilled Mechanics',
+        'Smooth Driving Feel',
+        'Customer Friendly',
+      ],
+      targetedKeywords: [
+        `best car repair${loc}`,
+        `trusted auto garage${loc}`,
+        'car service mechanic',
+        'brake and suspension repair',
+        'engine diagnostics specialist',
+        'fast car maintenance',
+      ],
+      productsOffered: [
+        'Complete Periodic Service',
+        'Engine Diagnostic & Tuning',
+        'Brake & Suspension Overhaul',
+        'AC Servicing & Gas Refill',
+        'Wheel Alignment & Balancing',
+      ],
+      serviceAreas: city ? [city, `Metro Area`, `Nearby Areas`] : ['Local Service Area'],
+    }
+  }
+
+  if (c.includes('gym') || c.includes('fitness') || c.includes('yoga') || c.includes('workout') || c.includes('crossfit') || c.includes('trainer')) {
+    return {
+      experienceButtons: [
+        'Modern Equipment',
+        'Supportive & Certified Trainers',
+        'Clean & Hygienic Gym',
+        'High Energy Atmosphere',
+        'Personalized Workout Plan',
+        'Visible Fitness Results',
+        'Friendly Community',
+      ],
+      targetedKeywords: [
+        `best gym${loc}`,
+        `top fitness center${loc}`,
+        'personal training gym',
+        'weight loss and muscle gain',
+        'certified yoga studio',
+      ],
+      productsOffered: [
+        'Annual Gym Membership',
+        '1-on-1 Personal Training',
+        'HIIT & Strength Classes',
+        'Custom Nutrition Coaching',
+      ],
+      serviceAreas: city ? [city, `Local Neighborhoods`] : ['Local Area'],
+    }
+  }
+
+  if (c.includes('real estate') || c.includes('property') || c.includes('realtor') || c.includes('interior') || c.includes('architect') || c.includes('construct') || c.includes('builder')) {
+    return {
+      experienceButtons: [
+        'Expert Guidance',
+        'Transparent Process',
+        'Creative & Modern Design',
+        'Timely Project Completion',
+        'Premium Quality Materials',
+        'Hassle-Free Handover',
+        'Highly Professional',
+      ],
+      targetedKeywords: [
+        `best interior designer${loc}`,
+        `trusted real estate agency${loc}`,
+        'modern home architecture',
+        'luxury commercial spaces',
+        'property consultation',
+      ],
+      productsOffered: [
+        'Turnkey Home Interiors',
+        'Modular Kitchens & Wardrobes',
+        'Residential Property Sales',
+        'Architectural 3D Planning',
+      ],
+      serviceAreas: city ? [city, `Greater ${city} Area`] : ['City Wide'],
+    }
+  }
+
+  if (c.includes('plumb') || c.includes('electr') || c.includes('hvac') || c.includes('carpenter') || c.includes('clean') || c.includes('pest') || c.includes('home service')) {
+    return {
+      experienceButtons: [
+        'Punctual & On-Time',
+        'Fixed Right the First Time',
+        'Clean & Neat Workmanship',
+        'Reasonable Rates',
+        'Courteous Technician',
+        'Prompt Emergency Response',
+      ],
+      targetedKeywords: [
+        `emergency plumber${loc}`,
+        `licensed electrician${loc}`,
+        'reliable home maintenance',
+        'expert AC repair service',
+        'fast doorstep repair',
+      ],
+      productsOffered: [
+        'Emergency Repair Service',
+        'Periodic Home Maintenance',
+        'Installation & Fittings',
+        'Deep Cleaning & Sanitization',
+      ],
+      serviceAreas: city ? [city, `All City Zones`] : ['Local Area'],
+    }
+  }
+
+  if (c.includes('law') || c.includes('legal') || c.includes('advocate') || c.includes('ca') || c.includes('account') || c.includes('tax') || c.includes('consult') || c.includes('agency') || c.includes('tech') || c.includes('software')) {
+    return {
+      experienceButtons: [
+        'Clear & Honest Advice',
+        'Prompt Communication',
+        'Thorough Documentation',
+        'Strategic Solutions',
+        'Trustworthy & Confidential',
+        'Smooth & Stress-Free',
+      ],
+      targetedKeywords: [
+        `trusted corporate legal consultant${loc}`,
+        `expert chartered accountant${loc}`,
+        'income tax and GST filing',
+        'top digital agency',
+        'business advisory services',
+      ],
+      productsOffered: [
+        'Consultation & Advisory',
+        'Annual Compliance Package',
+        'Custom Project Delivery',
+        'Audit & Risk Assessment',
+      ],
+      serviceAreas: city ? [city, `Regional Clients`, `National / Remote`] : ['Local & Remote'],
+    }
+  }
+
+  // Default / Retail
+  return {
+    experienceButtons: [
+      'Top-Notch Quality',
+      'Helpful & Polite Staff',
+      'Prompt & Efficient Service',
+      'Fair & Transparent Value',
+      'Clean & Welcoming Space',
+      'Smooth Experience',
+      'Highly Recommended',
+    ],
+    targetedKeywords: [
+      `best ${category || 'service'}${loc}`,
+      `trusted local ${category || 'business'}${loc}`,
+      `top rated ${category || 'specialist'}`,
+      'quality service provider',
+      'affordable and reliable',
+    ],
+    productsOffered: [
+      'Standard Service Package',
+      'Custom Consultation',
+      'Premium Offering',
+    ],
+    serviceAreas: city ? [city, `Local Neighborhoods`] : ['City Area'],
+  }
+}
+
+async function suggestCampaignSEO(body) {
+  const biz = body.businessName || 'Business'
+  const cat = body.category || ''
+  const city = body.city || ''
+  const srv = body.services || ''
+  const desc = body.description || ''
+
+  const baseline = getCategoryTemplate(cat, city, srv)
+
+  try {
+    const prompt = [
+      'You are a Google Business Profile & Local SEO expert copywriter.',
+      `Generate tailored, high-converting settings for this local business to rank higher on Google Maps:`,
+      `Business: ${biz}`,
+      `Category: ${cat || 'Local Business'}`,
+      `City: ${city || 'Local Area'}`,
+      srv ? `Services: ${srv}` : '',
+      desc ? `Description: ${desc}` : '',
+      '',
+      'Return ONLY a raw JSON object with these 4 keys:',
+      '{',
+      '  "experienceButtons": string[], // 6-7 authentic customer experience buttons (2-4 words each, e.g. "Delicious Cold Brew", "Cozy Ambience", "Painless Treatment", "Friendly Staff")',
+      '  "targetedKeywords": string[], // 6-8 local SEO search keywords for Google Maps ranking (e.g. "best dental clinic in Indiranagar", "specialty coffee cafe", etc.)',
+      '  "productsOffered": string[], // 3-5 popular services, products or packages offered',
+      '  "serviceAreas": string[] // 3-5 specific neighborhoods, localities, or service zones',
+      '}',
+      'RAW JSON ONLY. No markdown, no prose.',
+    ].filter(Boolean).join('\n')
+
+    const res = await callLLM([{ role: 'user', content: prompt }], 0.7)
+    const parsed = extractJsonObject(res)
+    if (parsed && Array.isArray(parsed.experienceButtons) && parsed.experienceButtons.length > 0) {
+      return {
+        experienceButtons: parsed.experienceButtons.slice(0, 8),
+        targetedKeywords: Array.isArray(parsed.targetedKeywords) ? parsed.targetedKeywords.slice(0, 8) : baseline.targetedKeywords,
+        productsOffered: Array.isArray(parsed.productsOffered) ? parsed.productsOffered.slice(0, 6) : baseline.productsOffered,
+        serviceAreas: Array.isArray(parsed.serviceAreas) ? parsed.serviceAreas.slice(0, 6) : baseline.serviceAreas,
+      }
+    }
+  } catch (err) {
+    console.warn('[suggestCampaignSEO] AI failed, using smart baseline:', err.message)
+  }
+
+  return baseline
+}
 
 function buildCampaign(body) {
   const now = new Date()
   const base = slugify(body.businessName)
+  const category = body.category || ''
+  const city = body.city || ''
+  const srv = Array.isArray(body.services) ? body.services.join(', ') : String(body.services || '')
+
+  const template = getCategoryTemplate(category, city, srv)
+
+  let experienceButtons = []
+  if (Array.isArray(body.experienceButtons) && body.experienceButtons.length > 0) {
+    experienceButtons = body.experienceButtons
+  } else {
+    experienceButtons = template.experienceButtons.map((label) => ({ id: uuidv4(), label, enabled: true }))
+  }
+
+  const targetedKeywords = Array.isArray(body.targetedKeywords) && body.targetedKeywords.length > 0
+    ? body.targetedKeywords
+    : (body.targetedKeywords
+        ? String(body.targetedKeywords).split(',').map((s) => s.trim()).filter(Boolean)
+        : template.targetedKeywords)
+
+  const productsOffered = Array.isArray(body.productsOffered) && body.productsOffered.length > 0
+    ? body.productsOffered
+    : (body.productsOffered
+        ? String(body.productsOffered).split(',').map((s) => s.trim()).filter(Boolean)
+        : template.productsOffered)
+
+  const serviceAreas = Array.isArray(body.serviceAreas) && body.serviceAreas.length > 0
+    ? body.serviceAreas
+    : (body.serviceAreas
+        ? String(body.serviceAreas).split(',').map((s) => s.trim()).filter(Boolean)
+        : template.serviceAreas)
+
   return {
     id: uuidv4(),
     slug: `${base || 'biz'}-${Math.random().toString(36).slice(2, 7)}`,
     businessName: body.businessName || 'My Business',
-    category: body.category || '',
-    city: body.city || '',
+    category,
+    city,
     services: Array.isArray(body.services)
       ? body.services
       : String(body.services || '')
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
+    targetedKeywords,
+    productsOffered,
+    serviceAreas,
     description: body.description || '',
     headline: body.headline || 'How was your experience?',
     subheadline: body.subheadline || 'Tap what you loved and we will help you write a quick review.',
@@ -918,10 +1257,7 @@ function buildCampaign(body) {
     primaryColor: body.primaryColor || '#6d28d9',
     secondaryColor: body.secondaryColor || '#4f46e5',
     logoUrl: body.logoUrl || '',
-    experienceButtons:
-      Array.isArray(body.experienceButtons) && body.experienceButtons.length
-        ? body.experienceButtons
-        : DEFAULT_BUTTONS.map((b) => ({ ...b, id: uuidv4() })),
+    experienceButtons,
     allowMultiSelect: body.allowMultiSelect !== false,
     textFieldEnabled: body.textFieldEnabled !== false,
     maxTextLength: body.maxTextLength || 500,
@@ -2107,6 +2443,13 @@ async function handleRoute(request, { params }) {
 
 
     // ------------------ Campaigns (owner side) ------------------
+    if (route === '/campaigns/suggest-seo' && method === 'POST') {
+      if (!auth?.org) return json({ error: 'unauthorized' }, 401)
+      const body = await request.json().catch(() => ({}))
+      const suggestions = await suggestCampaignSEO(body)
+      return json(suggestions)
+    }
+
     if (route === '/campaigns' && method === 'GET') {
       if (!auth?.org) return json({ error: 'unauthorized' }, 401)
       const list = await db.collection('campaigns').find({ orgId: auth.org.id }).sort({ createdAt: -1 }).limit(200).toArray()
@@ -2179,6 +2522,15 @@ async function handleRoute(request, { params }) {
         delete update._id
         if (typeof update.services === 'string') {
           update.services = update.services.split(',').map((s) => s.trim()).filter(Boolean)
+        }
+        if (typeof update.targetedKeywords === 'string') {
+          update.targetedKeywords = update.targetedKeywords.split(',').map((s) => s.trim()).filter(Boolean)
+        }
+        if (typeof update.productsOffered === 'string') {
+          update.productsOffered = update.productsOffered.split(',').map((s) => s.trim()).filter(Boolean)
+        }
+        if (typeof update.serviceAreas === 'string') {
+          update.serviceAreas = update.serviceAreas.split(',').map((s) => s.trim()).filter(Boolean)
         }
         await db.collection('campaigns').updateOne({ id }, { $set: update })
         const updated = await db.collection('campaigns').findOne({ id })
